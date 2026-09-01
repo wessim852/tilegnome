@@ -23,6 +23,7 @@ const WINDOW_READY_RETRY_MS = 100;
 
 export default class DwindleExtension extends Extension {
     enable() {
+        this._generation = (this._generation ?? 0) + 1;
         this._destroyed = false;
         this._daemonWarned = false;
         this._queue = Promise.resolve();
@@ -176,14 +177,7 @@ export default class DwindleExtension extends Extension {
     }
 
     _scheduleContext(window) {
-        this._scheduleWindow(window, () => {
-            if (!windowContextReady(window))
-                this._syncEligibility(window);
-            else if (this._registry.has(window))
-                this._sendContext(window);
-            else
-                this._syncEligibility(window);
-        });
+        this._scheduleEligibility(window);
     }
 
     _sendContext(window) {
@@ -332,16 +326,19 @@ export default class DwindleExtension extends Extension {
     }
 
     _send(command) {
+        const generation = this._generation;
         this._queue = this._queue.then(async () => {
-            if (this._destroyed)
+            if (this._destroyed || generation !== this._generation)
                 return;
             try {
                 const json = await this._client.request(command);
-                if (this._destroyed)
+                if (this._destroyed || generation !== this._generation)
                     return;
                 this._daemonWarned = false;
                 this._handleResponse(JSON.parse(json));
             } catch (error) {
+                if (this._destroyed || generation !== this._generation)
+                    return;
                 if (!this._daemonWarned) {
                     console.warn(`[DwindleRS] request failed; tiling paused: ${error.message}`);
                     this._daemonWarned = true;
@@ -410,9 +407,16 @@ export default class DwindleExtension extends Extension {
         try {
             if (window.is_fullscreen())
                 return;
-            if (window.is_maximized())
+            const maximized = window.is_maximized();
+            if (maximized)
                 window.unmaximize();
             const {x, y, width, height} = rect;
+            const current = window.get_frame_rect();
+            if (!maximized && current.x === x && current.y === y
+                && current.width === width && current.height === height) {
+                this._updateBorder(window);
+                return;
+            }
             window.move_resize_frame(false, x, y, width, height);
             this._updateBorder(window);
         } catch (error) {
@@ -420,7 +424,7 @@ export default class DwindleExtension extends Extension {
             this._scheduleFullSync();
             return;
         }
-        // ponytail: six retries cover Wayland map/maximize handshakes; use
+        // ponytail: six attempts cover Wayland map/maximize handshakes; use
         // configure acknowledgements if a client can still override after 450 ms.
         if (attempt >= 5)
             return;
