@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="dev.dwindlers" path="/dev/dwindlers/">
+    <key name="enabled" type="b">
+      <default>true</default>
+      <summary>Enable automatic tiling</summary>
+    </key>
+    <key name="inner-gap" type="i">
+      <default>8</default>
+      <range min="0" max="512"/>
+      <summary>Gap between sibling windows</summary>
+    </key>
+    <key name="outer-gap" type="i">
+      <default>8</default>
+      <range min="0" max="512"/>
+      <summary>Gap around each monitor work area</summary>
+    </key>
+    <key name="split-ratio" type="d">
+      <default>0.5</default>
+      <range min="0.1" max="0.9"/>
+      <summary>Ratio used for a new split</summary>
+    </key>
+    <key name="resize-step" type="d">
+      <default>0.05</default>
+      <range min="0.01" max="0.25"/>
+      <summary>Keyboard resize step</summary>
+    </key>
+    <key name="smart-split" type="b">
+      <default>true</default>
+      <summary>Choose split orientation from target geometry</summary>
+    </key>
+    <key name="ignored-apps" type="as">
+      <default>[]</default>
+      <summary>Application IDs that should never tile</summary>
+    </key>
+
+    <!-- Extension key names are prefixed because Mutter's registry is global. -->
+    <key name="dwindle-focus-left" type="as"><default>['&lt;Super&gt;&lt;Alt&gt;h']</default></key>
+    <key name="dwindle-focus-down" type="as"><default>['&lt;Super&gt;j']</default></key>
+    <key name="dwindle-focus-up" type="as"><default>['&lt;Super&gt;k']</default></key>
+    <key name="dwindle-focus-right" type="as"><default>['&lt;Super&gt;&lt;Alt&gt;l']</default></key>
+    <key name="dwindle-move-left" type="as"><default>['&lt;Super&gt;&lt;Shift&gt;h']</default></key>
+    <key name="dwindle-move-down" type="as"><default>['&lt;Super&gt;&lt;Shift&gt;j']</default></key>
+    <key name="dwindle-move-up" type="as"><default>['&lt;Super&gt;&lt;Shift&gt;k']</default></key>
+    <key name="dwindle-move-right" type="as"><default>['&lt;Super&gt;&lt;Shift&gt;l']</default></key>
+    <key name="dwindle-resize-left" type="as"><default>['&lt;Super&gt;&lt;Control&gt;h']</default></key>
+    <key name="dwindle-resize-down" type="as"><default>['&lt;Super&gt;&lt;Control&gt;j']</default></key>
+    <key name="dwindle-resize-up" type="as"><default>['&lt;Super&gt;&lt;Control&gt;k']</default></key>
+    <key name="dwindle-resize-right" type="as"><default>['&lt;Super&gt;&lt;Control&gt;l']</default></key>
+    <key name="dwindle-toggle-floating" type="as"><default>['&lt;Super&gt;&lt;Alt&gt;space']</default></key>
+    <key name="dwindle-toggle-fullscreen" type="as"><default>['&lt;Super&gt;f']</default></key>
+    <key name="dwindle-toggle-group" type="as"><default>['&lt;Super&gt;g']</default></key>
+    <key name="dwindle-group-next" type="as"><default>['&lt;Super&gt;&lt;Alt&gt;j']</default></key>
+    <key name="dwindle-group-previous" type="as"><default>['&lt;Super&gt;&lt;Alt&gt;k']</default></key>
+  </schema>
+</schemalist>

@@ -1,0 +1,13 @@
+[package]
+name = "dwindle-daemon"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+dwindle-core = { path = "../dwindle-core" }
+serde_json.workspace = true
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
+tracing.workspace = true
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+zbus = { version = "5", default-features = false, features = ["tokio"] }

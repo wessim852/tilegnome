@@ -1,0 +1,8 @@
+{
+  "uuid": "dwindle-rs@dwindlers.dev",
+  "name": "DwindleRS",
+  "description": "Rust-powered dwindle tiling for GNOME Shell 50",
+  "version": 1,
+  "shell-version": ["50"],
+  "settings-schema": "dev.dwindlers"
+}
