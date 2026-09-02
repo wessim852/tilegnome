@@ -40,6 +40,8 @@ fn window(name: &str, context: ContextKey, focused: bool) -> WindowSnapshot {
         context,
         app_id: Some(format!("dev.test.{name}")),
         frame_rect: Rect::default(),
+        min_width: 0,
+        min_height: 0,
         fullscreen: false,
         window_type: "normal".into(),
         focused,
@@ -149,12 +151,40 @@ fn basic_dwindle_insertion_uses_focused_leaf() {
 }
 
 #[test]
+fn minimum_size_uses_root_fallback_when_focused_leaf_cannot_split() {
+    let key = context(0, 0);
+    let mut state = synced_state(&[(key, area())]);
+    add(&mut state, "A", key, true, area());
+    add(&mut state, "B", key, true, area());
+
+    let mut spotify = window("C", key, false);
+    spotify.min_width = 800;
+    spotify.min_height = 600;
+    state
+        .apply(Command::AddWindow {
+            window: spotify,
+            work_area: area(),
+        })
+        .unwrap();
+
+    assert_eq!(rect_for(&state, "A").width, 945);
+    assert_eq!(rect_for(&state, "A").height, 525);
+    assert_eq!(rect_for(&state, "B").width, 945);
+    assert_eq!(rect_for(&state, "B").height, 525);
+    assert_eq!(rect_for(&state, "C").width, 945);
+    assert_eq!(rect_for(&state, "C").height, 1060);
+    state.validate_invariants().unwrap();
+}
+
+#[test]
 fn removal_collapses_parents_and_final_window_clears_root() {
     let mut tree = LayoutTree::new();
     let cfg = config();
-    tree.insert(id("A"), None, area(), &cfg).unwrap();
-    tree.insert(id("B"), Some(&id("A")), area(), &cfg).unwrap();
-    tree.insert(id("C"), Some(&id("B")), area(), &cfg).unwrap();
+    tree.insert(id("A"), None, area(), &cfg, (0, 0)).unwrap();
+    tree.insert(id("B"), Some(&id("A")), area(), &cfg, (0, 0))
+        .unwrap();
+    tree.insert(id("C"), Some(&id("B")), area(), &cfg, (0, 0))
+        .unwrap();
     tree.remove(&id("B")).unwrap();
     assert_eq!(tree.len(), 2);
     tree.validate_invariants().unwrap();

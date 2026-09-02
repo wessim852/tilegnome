@@ -1,8 +1,18 @@
-import Clutter from 'gi://Clutter';
 import St from 'gi://St';
 
 const NORMAL_STYLE = 'border: 2px solid rgba(150, 160, 175, 0.85); border-radius: 4px;';
 const FOCUSED_STYLE = 'border: 3px solid #33d6ff; border-radius: 4px;';
+
+export function borderGeometry(window) {
+    const frame = window.get_frame_rect();
+    const buffer = window.get_buffer_rect();
+    return {
+        x: frame.x - buffer.x,
+        y: frame.y - buffer.y,
+        width: frame.width,
+        height: frame.height,
+    };
+}
 
 export class WindowBorders {
     constructor() {
@@ -20,6 +30,10 @@ export class WindowBorders {
     }
 
     update(window, focused) {
+        if (window.is_fullscreen()) {
+            this.remove(window);
+            return;
+        }
         const windowActor = window.get_compositor_private();
         if (!windowActor) {
             this.remove(window);
@@ -29,14 +43,13 @@ export class WindowBorders {
         if (entry?.windowActor !== windowActor) {
             this.remove(window);
             const actor = new St.Widget({reactive: false, x: 0, y: 0});
-            actor.add_constraint(new Clutter.BindConstraint({
-                source: windowActor,
-                coordinate: Clutter.BindCoordinate.SIZE,
-            }));
             windowActor.add_child(actor);
             entry = {actor, windowActor};
             this._actors.set(window, entry);
         }
+        const {x, y, width, height} = borderGeometry(window);
+        entry.actor.set_position(x, y);
+        entry.actor.set_size(width, height);
         entry.actor.set_style(focused ? FOCUSED_STYLE : NORMAL_STYLE);
         windowActor.set_child_above_sibling(entry.actor, null);
     }

@@ -16,6 +16,8 @@ use crate::{
 struct WindowRecord {
     context: ContextKey,
     floating: bool,
+    min_width: i32,
+    min_height: i32,
 }
 
 #[derive(Clone, Debug)]
@@ -232,6 +234,8 @@ impl EngineState {
             WindowRecord {
                 context: window.context,
                 floating,
+                min_width: window.min_width.max(0),
+                min_height: window.min_height.max(0),
             },
         );
         if !floating {
@@ -314,6 +318,11 @@ impl EngineState {
         window: &WindowId,
         context_key: ContextKey,
     ) -> Result<(), EngineError> {
+        let record = self
+            .windows
+            .get(window)
+            .ok_or_else(|| EngineError::UnknownWindow(window.clone()))?;
+        let min_size = (record.min_width, record.min_height);
         let focused = self.focused.as_ref().filter(|focused| {
             self.windows
                 .get(*focused)
@@ -326,9 +335,13 @@ impl EngineState {
                 context_key.workspace,
                 context_key.monitor,
             ))?;
-        context
-            .tree
-            .insert(window.clone(), focused, context.work_area, &self.config)?;
+        context.tree.insert(
+            window.clone(),
+            focused,
+            context.work_area,
+            &self.config,
+            min_size,
+        )?;
         Ok(())
     }
 

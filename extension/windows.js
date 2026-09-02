@@ -73,18 +73,26 @@ export function applicationId(window) {
         ?? null;
 }
 
-export function shouldTile(window, ignored) {
+export function isTileCandidate(window, ignored) {
     try {
         const appId = applicationId(window)?.toLowerCase();
-        // Secondary-monitor windows are sticky when GNOME uses workspaces only on the primary.
         return window.get_window_type() === Meta.WindowType.NORMAL
             && !window.is_attached_dialog()
             && !window.is_override_redirect()
             && !window.is_skip_taskbar()
             && !window.is_fullscreen()
-            && window.allows_move()
-            && window.allows_resize()
             && !(appId && ignored.has(appId));
+    } catch {
+        return false;
+    }
+}
+
+export function shouldTile(window, ignored) {
+    try {
+        return isTileCandidate(window, ignored)
+            && windowContextReady(window)
+            && window.allows_move()
+            && window.allows_resize();
     } catch {
         return false;
     }
@@ -105,9 +113,8 @@ export function windowContextReady(window) {
 }
 
 export function workspaceFor(window) {
-    if (window.is_on_all_workspaces())
-        return global.workspace_manager.get_active_workspace();
-    return window.get_workspace();
+    // Mutter can briefly expose a mapped normal window before assigning its workspace.
+    return window.get_workspace() ?? global.workspace_manager.get_active_workspace();
 }
 
 export function contextFor(window) {
@@ -132,12 +139,24 @@ export function workAreaFor(window) {
     );
 }
 
+export function minimumSize(window) {
+    try {
+        const [known, width, height] = window.get_min_size();
+        if (known)
+            return {min_width: Math.max(0, width), min_height: Math.max(0, height)};
+    } catch {
+        // Size hints are optional; zero means unconstrained to the Rust engine.
+    }
+    return {min_width: 0, min_height: 0};
+}
+
 export function snapshotWindow(window) {
     return {
         id: windowId(window),
         context: contextFor(window),
         app_id: applicationId(window),
         frame_rect: rectFromMutter(window.get_frame_rect()),
+        ...minimumSize(window),
         fullscreen: window.is_fullscreen(),
         window_type: window.get_window_type() === Meta.WindowType.NORMAL ? 'normal' : 'other',
         focused: global.display.get_focus_window() === window,

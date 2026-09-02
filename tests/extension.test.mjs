@@ -29,9 +29,9 @@ const sandbox = {
     console,
     global: {},
     ignoredApps: () => new Set(),
+    isTileCandidate: () => true,
     readConfig: settings => settings.config,
-    shouldTile: () => true,
-    windowContextReady: () => false,
+    shouldTile: () => false,
 };
 vm.runInNewContext(source, sandbox);
 const ExtensionClass = sandbox.DwindleExtension;
@@ -192,6 +192,50 @@ const ExtensionClass = sandbox.DwindleExtension;
 }
 
 {
+    const window = {};
+    let contextRefreshes = 0;
+    let fullSyncs = 0;
+    sandbox.workAreaFor = () => ({x: 0, y: 0, width: 100, height: 100});
+    const extension = Object.assign(Object.create(ExtensionClass.prototype), {
+        _registry: {get: () => window},
+        _stalePlacements: new Set(),
+        _safeRect: () => false,
+        _scheduleContext() { contextRefreshes++; },
+        _scheduleFullSync() {
+            fullSyncs++;
+        },
+    });
+    extension._applyPlacements([{
+        window_id: '1',
+        rect: {x: 200, y: 0, width: 100, height: 100},
+    }]);
+    assert.equal(contextRefreshes, 0);
+    assert.equal(fullSyncs, 0);
+}
+
+{
+    let madeFullscreen = 0;
+    let bordersRemoved = 0;
+    const window = {
+        is_fullscreen: () => false,
+        make_fullscreen() {
+            madeFullscreen++;
+        },
+    };
+    sandbox.global.display = {get_focus_window: () => window};
+    const extension = Object.assign(Object.create(ExtensionClass.prototype), {
+        _settings: {get_boolean: () => true},
+        _borders: {remove: candidate => {
+            assert.equal(candidate, window);
+            bordersRemoved++;
+        }},
+    });
+    extension._onKeybinding('toggle_fullscreen');
+    assert.equal(bordersRemoved, 1);
+    assert.equal(madeFullscreen, 1);
+}
+
+{
     let reconciliations = 0;
     const extension = Object.assign(Object.create(ExtensionClass.prototype), {
         _scheduleFullSync() {
@@ -210,6 +254,8 @@ const ExtensionClass = sandbox.DwindleExtension;
     const extension = Object.assign(Object.create(ExtensionClass.prototype), {
         _destroyed: false,
         _settings: {get_boolean: () => true},
+        _newWindows: new Set(),
+        _registry: {has: () => false},
         _readinessExhausted: new Set(),
         _scheduleWindow() {
             schedules++;
@@ -224,13 +270,38 @@ const ExtensionClass = sandbox.DwindleExtension;
 }
 
 {
+    const window = {
+        is_fullscreen: () => true,
+        unmake_fullscreen() {
+            this.unmade = true;
+        },
+    };
+    let scheduled;
+    const extension = Object.assign(Object.create(ExtensionClass.prototype), {
+        _destroyed: false,
+        _newWindows: new Set([window]),
+        _scheduleWindow(_window, callback) {
+            scheduled = callback;
+        },
+    });
+    extension._syncEligibility(window);
+    assert.equal(window.unmade, true);
+    assert.equal(typeof scheduled, 'function');
+    assert.equal(extension._newWindows.has(window), false);
+}
+
+{
     let windowsSource = readFileSync(new URL('../extension/windows.js', import.meta.url), 'utf8');
     windowsSource = windowsSource
         .replace(/^import .*;\n/gm, '')
         .replaceAll('export ', '');
-    windowsSource += '\nglobalThis.windowContextReady = windowContextReady;';
+    windowsSource += `
+globalThis.isTileCandidate = isTileCandidate;
+globalThis.minimumSize = minimumSize;
+globalThis.shouldTile = shouldTile;
+globalThis.windowContextReady = windowContextReady;`;
     const windowsSandbox = {
-        Meta: {},
+        Meta: {WindowType: {NORMAL: 0}},
         global: {
             display: {get_n_monitors: () => 2},
             workspace_manager: {
@@ -248,4 +319,77 @@ const ExtensionClass = sandbox.DwindleExtension;
     assert.equal(windowsSandbox.windowContextReady(window), true);
     window.get_monitor = () => 2;
     assert.equal(windowsSandbox.windowContextReady(window), false);
+    window.get_monitor = () => 1;
+    window.get_workspace = () => null;
+    assert.equal(windowsSandbox.windowContextReady(window), true);
+
+    let resizeable = false;
+    const appWindow = {
+        get_gtk_application_id: () => 'com.brave.Browser',
+        get_sandboxed_app_id: () => null,
+        get_wm_class: () => 'brave-browser',
+        get_window_type: () => 0,
+        is_attached_dialog: () => false,
+        is_override_redirect: () => false,
+        is_skip_taskbar: () => false,
+        is_fullscreen: () => false,
+        allows_move: () => true,
+        allows_resize: () => resizeable,
+        get_monitor: () => 1,
+        get_workspace: () => ({index: () => 2}),
+        get_min_size: () => [true, 800, 600],
+    };
+    assert.equal(windowsSandbox.isTileCandidate(appWindow, new Set()), true);
+    assert.equal(windowsSandbox.shouldTile(appWindow, new Set()), false);
+    resizeable = true;
+    assert.equal(windowsSandbox.shouldTile(appWindow, new Set()), true);
+    assert.deepEqual(
+        {...windowsSandbox.minimumSize(appWindow)},
+        {min_width: 800, min_height: 600}
+    );
+}
+
+{
+    let bordersSource = readFileSync(new URL('../extension/borders.js', import.meta.url), 'utf8');
+    bordersSource = bordersSource
+        .replace(/^import .*;\n/gm, '')
+        .replaceAll('export ', '');
+    bordersSource += '\nglobalThis.WindowBorders = WindowBorders;';
+    const borderSandbox = {
+        St: {
+            Widget: class {
+                set_position(x, y) {
+                    this.position = {x, y};
+                }
+
+                set_size(width, height) {
+                    this.size = {width, height};
+                }
+
+                set_style() {}
+                destroy() {}
+            },
+        },
+    };
+    vm.runInNewContext(bordersSource, borderSandbox);
+    const windowActor = {
+        add_child(actor) {
+            this.child = actor;
+        },
+        set_child_above_sibling() {},
+    };
+    let fullscreen = false;
+    const window = {
+        get_compositor_private: () => windowActor,
+        get_frame_rect: () => ({x: 10, y: 20, width: 900, height: 600}),
+        get_buffer_rect: () => ({x: -30, y: -20, width: 980, height: 680}),
+        is_fullscreen: () => fullscreen,
+    };
+    const borders = new borderSandbox.WindowBorders();
+    borders.update(window, true);
+    assert.deepEqual({...windowActor.child.position}, {x: 40, y: 40});
+    assert.deepEqual({...windowActor.child.size}, {width: 900, height: 600});
+    fullscreen = true;
+    borders.update(window, true);
+    assert.equal(borders._actors.size, 0);
 }

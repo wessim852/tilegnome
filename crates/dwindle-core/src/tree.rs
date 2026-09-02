@@ -97,6 +97,7 @@ impl LayoutTree {
         focused: Option<&WindowId>,
         work_area: Rect,
         config: &Config,
+        min_size: (i32, i32),
     ) -> Result<(), TreeError> {
         if self.contains(&window) {
             return Err(TreeError::DuplicateWindow(window));
@@ -134,15 +135,91 @@ impl LayoutTree {
             .get(&target)
             .copied()
             .ok_or_else(|| TreeError::Corrupt("target leaf has no rectangle".into()))?;
-        let orientation = if config.smart_split && target_rect.height > target_rect.width {
+        let preferred = if config.smart_split && target_rect.height > target_rect.width {
             Orientation::Vertical
         } else {
             Orientation::Horizontal
+        };
+        let alternate = match preferred {
+            Orientation::Horizontal => Orientation::Vertical,
+            Orientation::Vertical => Orientation::Horizontal,
+        };
+        let orientation = if split_fits(target_rect, preferred, config, min_size) {
+            preferred
+        } else if split_fits(target_rect, alternate, config, min_size) {
+            alternate
+        } else {
+            let root_rect = work_area.inset(config.outer_gap);
+            let root_preferred = if config.smart_split && root_rect.height > root_rect.width {
+                Orientation::Vertical
+            } else {
+                Orientation::Horizontal
+            };
+            let root_alternate = match root_preferred {
+                Orientation::Horizontal => Orientation::Vertical,
+                Orientation::Vertical => Orientation::Horizontal,
+            };
+            // ponytail: this guarantees the new client's hints; track constraints per
+            // tree leaf if constrained existing clients later need global reflow.
+            let root_orientation = [root_preferred, root_alternate]
+                .into_iter()
+                .find(|orientation| split_fits(root_rect, *orientation, config, min_size));
+            if let Some(root_orientation) = root_orientation {
+                self.wrap_root(window.clone(), root_orientation, config.split_ratio)?;
+                self.last_focused = Some(window);
+                debug!(event = "TREE_INSERT_ROOT_FALLBACK", windows = self.len());
+                self.debug_validate();
+                return Ok(());
+            }
+            preferred
         };
         self.split_leaf(&target, window.clone(), orientation, config.split_ratio)?;
         self.last_focused = Some(window);
         debug!(event = "TREE_INSERT", windows = self.len());
         self.debug_validate();
+        Ok(())
+    }
+
+    fn wrap_root(
+        &mut self,
+        window: WindowId,
+        orientation: Orientation,
+        ratio: f64,
+    ) -> Result<(), TreeError> {
+        let old_root = self
+            .root
+            .ok_or_else(|| TreeError::Corrupt("non-empty tree has no root".into()))?;
+        if let NodeKind::Split {
+            orientation: old_orientation,
+            ..
+        } = &mut self.nodes[old_root].kind
+            && *old_orientation == orientation
+        {
+            *old_orientation = match orientation {
+                Orientation::Horizontal => Orientation::Vertical,
+                Orientation::Vertical => Orientation::Horizontal,
+            };
+        }
+        let new_leaf = self.nodes.insert(Node {
+            parent: None,
+            kind: NodeKind::Leaf {
+                windows: vec![window.clone()],
+                active: 0,
+            },
+        });
+        let new_root = self.nodes.insert(Node {
+            parent: None,
+            kind: NodeKind::Split {
+                orientation,
+                ratio: ratio.clamp(MIN_RATIO, MAX_RATIO),
+                first: old_root,
+                second: new_leaf,
+            },
+        });
+        self.nodes[old_root].parent = Some(new_root);
+        self.nodes[new_leaf].parent = Some(new_root);
+        self.root = Some(new_root);
+        self.windows.insert(window, new_leaf);
         Ok(())
     }
 
@@ -390,7 +467,7 @@ impl LayoutTree {
         self.windows.insert(members[0].clone(), leaf);
         let mut target = members[0].clone();
         for member in members.into_iter().skip(1) {
-            self.insert(member.clone(), Some(&target), work_area, config)?;
+            self.insert(member.clone(), Some(&target), work_area, config, (0, 0))?;
             target = member;
         }
         self.set_focused(focused);
@@ -549,4 +626,17 @@ impl LayoutTree {
             self.validate_invariants()
         );
     }
+}
+
+fn split_fits(
+    rect: Rect,
+    orientation: Orientation,
+    config: &Config,
+    (min_width, min_height): (i32, i32),
+) -> bool {
+    let (_, second) = match orientation {
+        Orientation::Horizontal => rect.split_horizontal(config.split_ratio, config.inner_gap),
+        Orientation::Vertical => rect.split_vertical(config.split_ratio, config.inner_gap),
+    };
+    second.width >= min_width.max(0) && second.height >= min_height.max(0)
 }

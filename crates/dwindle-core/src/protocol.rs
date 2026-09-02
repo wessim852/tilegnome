@@ -84,6 +84,10 @@ pub struct WindowSnapshot {
     pub context: ContextKey,
     pub app_id: Option<String>,
     pub frame_rect: Rect,
+    #[serde(default)]
+    pub min_width: i32,
+    #[serde(default)]
+    pub min_height: i32,
     pub fullscreen: bool,
     pub window_type: String,
     pub focused: bool,

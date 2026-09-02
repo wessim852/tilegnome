@@ -10,10 +10,10 @@ import {
     SignalManager,
     WindowRegistry,
     contextFor,
+    isTileCandidate,
     rectFromMutter,
     shouldTile,
     snapshotWindow,
-    windowContextReady,
     windowId,
     workAreaFor,
 } from './windows.js';
@@ -31,8 +31,10 @@ export default class DwindleExtension extends Extension {
         this._registry = new WindowRegistry();
         this._borders = new WindowBorders();
         this._trackedWindows = new Set();
+        this._newWindows = new Set();
         this._windowSources = new Map();
         this._placementSources = new Map();
+        this._stalePlacements = new Set();
         this._readinessExhausted = new Set();
         this._fullSyncSource = 0;
         this._settings = this.getSettings();
@@ -58,6 +60,7 @@ export default class DwindleExtension extends Extension {
         for (const source of this._placementSources.values())
             GLib.source_remove(source);
         this._placementSources.clear();
+        this._stalePlacements.clear();
         this._readinessExhausted.clear();
         this._signals.clear();
         this._keybindings.destroy();
@@ -65,6 +68,7 @@ export default class DwindleExtension extends Extension {
         this._borders.clear();
         this._registry.clear();
         this._trackedWindows.clear();
+        this._newWindows.clear();
 
         this._keybindings = null;
         this._client = null;
@@ -78,6 +82,7 @@ export default class DwindleExtension extends Extension {
     _connectSignals() {
         const display = global.display;
         this._signals.connect(display, 'window-created', (_display, window) => {
+            this._newWindows.add(window);
             this._scheduleWindow(window, () => {
                 this._trackWindow(window);
                 this._syncEligibility(window);
@@ -130,10 +135,15 @@ export default class DwindleExtension extends Extension {
         this._trackedWindows.add(window);
         this._signals.connect(window, 'unmanaged', () => this._onUnmanaged(window));
         this._signals.connect(window, 'workspace-changed', () => this._scheduleContext(window));
-        this._signals.connect(window, 'notify::fullscreen', () => this._scheduleEligibility(window));
+        this._signals.connect(window, 'notify::fullscreen', () => {
+            if (window.is_fullscreen())
+                this._borders.remove(window);
+            this._scheduleEligibility(window);
+        });
         this._signals.connect(window, 'notify::skip-taskbar', () => this._scheduleEligibility(window));
         this._signals.connect(window, 'notify::window-type', () => this._scheduleEligibility(window));
         this._signals.connect(window, 'notify::mapped', () => this._scheduleContext(window));
+        this._signals.connect(window, 'notify::resizeable', () => this._scheduleEligibility(window));
         this._signals.connect(window, 'notify::maximized-horizontally', () => this._scheduleContext(window));
         this._signals.connect(window, 'notify::maximized-vertically', () => this._scheduleContext(window));
     }
@@ -142,11 +152,13 @@ export default class DwindleExtension extends Extension {
         this._cancelWindowSource(window);
         this._cancelPlacement(window);
         this._readinessExhausted.delete(window);
+        this._newWindows.delete(window);
         this._borders.remove(window);
         this._trackedWindows.delete(window);
         this._signals.disconnectObject(window);
         if (this._registry.has(window)) {
             const id = this._registry.remove(window);
+            this._stalePlacements.delete(id);
             this._send({command: 'remove_window', window_id: id});
         }
     }
@@ -154,9 +166,22 @@ export default class DwindleExtension extends Extension {
     _syncEligibility(window, attempt = 0) {
         if (this._destroyed)
             return;
-        const eligible = this._settings.get_boolean('enabled')
-            && shouldTile(window, ignoredApps(this._settings));
-        if (eligible && !windowContextReady(window)) {
+        if (attempt === 0 && this._newWindows.delete(window) && window.is_fullscreen()) {
+            window.unmake_fullscreen();
+            this._scheduleWindow(
+                window,
+                () => this._syncEligibility(window, attempt + 1),
+                WINDOW_READY_RETRY_MS
+            );
+            return;
+        }
+        const enabled = this._settings.get_boolean('enabled');
+        const ignored = ignoredApps(this._settings);
+        const candidate = enabled && isTileCandidate(window, ignored);
+        const eligible = candidate && shouldTile(window, ignored);
+        if (candidate && !eligible) {
+            if (this._registry.has(window))
+                return;
             // ponytail: five seconds covers slow Wayland clients; a Mutter signal retries later.
             if (attempt < WINDOW_READY_RETRIES) {
                 this._scheduleWindow(
@@ -166,7 +191,7 @@ export default class DwindleExtension extends Extension {
                 );
             } else {
                 this._readinessExhausted.add(window);
-                console.warn('[DwindleRS] window context did not become ready; waiting for Mutter');
+                console.warn('[DwindleRS] normal window did not become tile-ready; waiting for Mutter');
             }
             return;
         }
@@ -263,17 +288,19 @@ export default class DwindleExtension extends Extension {
         }
 
         this._registry.clear();
+        this._stalePlacements.clear();
         const ignored = ignoredApps(this._settings);
         const enabled = this._settings.get_boolean('enabled');
         const windows = [];
         if (enabled) {
             for (const window of current) {
-                if (!windowContextReady(window)) {
-                    if (shouldTile(window, ignored) && !this._readinessExhausted.has(window))
-                        this._scheduleWindow(window, () => this._syncEligibility(window));
-                } else if (shouldTile(window, ignored)) {
+                if (!isTileCandidate(window, ignored))
+                    continue;
+                if (shouldTile(window, ignored)) {
                     this._registry.add(window);
                     windows.push(snapshotWindow(window));
+                } else if (!this._readinessExhausted.has(window)) {
+                    this._scheduleWindow(window, () => this._syncEligibility(window));
                 }
             }
         }
@@ -333,8 +360,10 @@ export default class DwindleExtension extends Extension {
         if (action === 'toggle_fullscreen') {
             if (window.is_fullscreen())
                 window.unmake_fullscreen();
-            else
+            else {
+                this._borders.remove(window);
                 window.make_fullscreen();
+            }
             return;
         }
         if (!this._registry.has(window))
@@ -401,26 +430,27 @@ export default class DwindleExtension extends Extension {
     _applyPlacements(placements) {
         if (!Array.isArray(placements))
             throw new Error('placements are not an array');
-        let missing = false;
         for (const placement of placements) {
             if (!placement || typeof placement.window_id !== 'string')
                 throw new Error('unsafe placement from daemon');
             const window = this._registry.get(placement.window_id);
-            if (!window) {
-                missing = true;
+            if (!window)
                 continue;
-            }
             try {
-                if (!this._safeRect(placement.rect, [workAreaFor(window)]))
-                    throw new Error('rectangle is outside the window context work area');
+                if (!this._safeRect(placement.rect, [workAreaFor(window)])) {
+                    if (!this._stalePlacements.has(placement.window_id))
+                        console.warn('[DwindleRS] stale placement skipped');
+                    this._stalePlacements.add(placement.window_id);
+                    continue;
+                }
+                this._stalePlacements.delete(placement.window_id);
                 this._queuePlacement(window, placement.rect);
             } catch (error) {
-                console.warn(`[DwindleRS] placement skipped: ${error.message}`);
-                missing = true;
+                if (!this._stalePlacements.has(placement.window_id))
+                    console.warn(`[DwindleRS] placement skipped: ${error.message}`);
+                this._stalePlacements.add(placement.window_id);
             }
         }
-        if (missing)
-            this._scheduleFullSync();
     }
 
     _queuePlacement(window, rect) {
