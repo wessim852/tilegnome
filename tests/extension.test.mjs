@@ -37,6 +37,35 @@ vm.runInNewContext(source, sandbox);
 const ExtensionClass = sandbox.DwindleExtension;
 
 {
+    const window = {};
+    let sent;
+    let registered = true;
+    const extension = Object.assign(Object.create(ExtensionClass.prototype), {
+        _registry: {
+            remove(candidate) {
+                assert.equal(candidate, window);
+                registered = false;
+                return '42';
+            },
+        },
+        _stalePlacements: new Set(['42']),
+        _send(command) {
+            sent = command;
+        },
+        _cancelWindowSource() {},
+        _cancelPlacement() {},
+        _readinessExhausted: new Set([window]),
+        _borders: {remove() { throw new Error('actor finalized'); }},
+        _trackedWindows: new Set([window]),
+        _signals: {disconnectObject() {}},
+    });
+    extension._onUnmanaged(window);
+    assert.equal(registered, false);
+    assert.deepEqual({...sent}, {command: 'remove_window', window_id: '42'});
+    assert.equal(extension._stalePlacements.has('42'), false);
+}
+
+{
     const extension = Object.create(ExtensionClass.prototype);
     const window = {};
     let scheduled;
@@ -72,6 +101,30 @@ const ExtensionClass = sandbox.DwindleExtension;
     extension._onActiveWorkspaceChanged();
     assert.equal(focusChanges, 1);
     assert.deepEqual(scheduled, [sticky]);
+}
+
+{
+    const closed = {};
+    const live = {};
+    const removed = [];
+    sandbox.global.display = {
+        list_all_windows: () => [live],
+        get_focus_window: () => live,
+    };
+    sandbox.windowId = () => 'live';
+    const extension = Object.assign(Object.create(ExtensionClass.prototype), {
+        _registry: {
+            values: () => [closed, live],
+            has: candidate => candidate === live,
+        },
+        _onUnmanaged(window) {
+            removed.push(window);
+        },
+        _syncBorders() {},
+        _send() {},
+    });
+    extension._onFocusChanged();
+    assert.deepEqual(removed, [closed]);
 }
 
 {

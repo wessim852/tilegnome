@@ -151,17 +151,21 @@ export default class DwindleExtension extends Extension {
     }
 
     _onUnmanaged(window) {
-        this._cancelWindowSource(window);
-        this._cancelPlacement(window);
-        this._readinessExhausted.delete(window);
-        this._borders.remove(window);
-        this._trackedWindows.delete(window);
-        this._signals.disconnectObject(window);
-        if (this._registry.has(window)) {
-            const id = this._registry.remove(window);
+        const id = this._registry.remove(window);
+        if (id !== null) {
             this._stalePlacements.delete(id);
             this._send({command: 'remove_window', window_id: id});
         }
+        this._cancelWindowSource(window);
+        this._cancelPlacement(window);
+        this._readinessExhausted.delete(window);
+        try {
+            this._borders.remove(window);
+        } catch (error) {
+            console.warn(`[DwindleRS] stale border cleanup skipped: ${error.message}`);
+        }
+        this._trackedWindows.delete(window);
+        this._signals.disconnectObject(window);
     }
 
     _syncEligibility(window, attempt = 0) {
@@ -323,6 +327,11 @@ export default class DwindleExtension extends Extension {
     }
 
     _onFocusChanged() {
+        const liveWindows = new Set(global.display.list_all_windows());
+        for (const window of [...this._registry.values()]) {
+            if (!liveWindows.has(window))
+                this._onUnmanaged(window);
+        }
         const window = global.display.get_focus_window();
         this._syncBorders();
         if (window && this._registry.has(window)) {

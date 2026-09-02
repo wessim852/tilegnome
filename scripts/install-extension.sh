@@ -17,6 +17,7 @@ install -d -- "$TARGET"
 cp -R -- "$PROJECT_ROOT/extension/." "$TARGET/"
 glib-compile-schemas --strict "$TARGET/schemas"
 echo "Installed $UUID at $TARGET"
+echo 'GNOME Shell caches extension modules: log out and back in before testing GJS changes.'
 if gnome-extensions info "$UUID" >/dev/null 2>&1; then
     echo "Enable with: gnome-extensions enable $UUID"
 else
