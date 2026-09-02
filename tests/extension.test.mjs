@@ -287,6 +287,7 @@ const ExtensionClass = sandbox.DwindleExtension;
         .replace(/^import .*;\n/gm, '')
         .replaceAll('export ', '');
     windowsSource += `
+globalThis.WindowRegistry = WindowRegistry;
 globalThis.isTileCandidate = isTileCandidate;
 globalThis.minimumSize = minimumSize;
 globalThis.shouldTile = shouldTile;
@@ -302,6 +303,21 @@ globalThis.windowContextReady = windowContextReady;`;
         },
     };
     vm.runInNewContext(windowsSource, windowsSandbox);
+    let windowAlive = true;
+    const managedWindow = {
+        get_stable_sequence() {
+            if (!windowAlive)
+                throw new Error('window finalized');
+            return 42;
+        },
+    };
+    const registry = new windowsSandbox.WindowRegistry();
+    registry.add(managedWindow);
+    windowAlive = false;
+    assert.equal(registry.has(managedWindow), true);
+    assert.equal(registry.remove(managedWindow), '42');
+    assert.equal(registry.get('42'), undefined);
+
     const window = {
         get_monitor: () => 1,
         get_workspace: () => ({index: () => 2}),

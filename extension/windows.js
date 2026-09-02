@@ -33,15 +33,21 @@ export class SignalManager {
 export class WindowRegistry {
     constructor() {
         this._windows = new Map();
+        this._ids = new Map();
     }
 
     add(window) {
-        this._windows.set(windowId(window), window);
+        const id = windowId(window);
+        this._windows.set(id, window);
+        this._ids.set(window, id);
     }
 
     remove(window) {
-        const id = windowId(window);
+        const id = this._ids.get(window);
+        if (id === undefined)
+            return null;
         this._windows.delete(id);
+        this._ids.delete(window);
         return id;
     }
 
@@ -54,11 +60,12 @@ export class WindowRegistry {
     }
 
     has(window) {
-        return this._windows.has(windowId(window));
+        return this._ids.has(window);
     }
 
     clear() {
         this._windows.clear();
+        this._ids.clear();
     }
 }
 

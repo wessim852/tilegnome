@@ -151,6 +151,12 @@ export default class DwindleExtension extends Extension {
         };
         this._signals.connect(window, 'notify::maximized-horizontally', maximizedChanged);
         this._signals.connect(window, 'notify::maximized-vertically', maximizedChanged);
+        const geometryChanged = () => {
+            if (this._maximizedWindows.has(window))
+                this._updateBorder(window);
+        };
+        this._signals.connect(window, 'position-changed', geometryChanged);
+        this._signals.connect(window, 'size-changed', geometryChanged);
     }
 
     _onUnmanaged(window) {
