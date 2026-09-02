@@ -30,14 +30,10 @@ impl LayoutTree {
 
     fn layout_node(&self, key: NodeKey, rect: Rect, inner_gap: i32, output: &mut Vec<Placement>) {
         match &self.nodes[key].kind {
-            NodeKind::Leaf { windows, .. } => {
-                output.extend(
-                    windows
-                        .iter()
-                        .cloned()
-                        .map(|window_id| Placement { window_id, rect }),
-                );
-            }
+            NodeKind::Leaf { window } => output.push(Placement {
+                window_id: window.clone(),
+                rect,
+            }),
             NodeKind::Split {
                 orientation,
                 ratio,

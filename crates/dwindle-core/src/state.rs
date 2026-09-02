@@ -6,8 +6,8 @@ use tracing::{debug, info};
 use crate::{
     navigation::best_candidate,
     protocol::{
-        Command, Config, ContextKey, CycleDirection, Direction, Placement, Response, Snapshot,
-        WindowId, WindowSnapshot,
+        Command, Config, ContextKey, Direction, Placement, Response, Snapshot, WindowId,
+        WindowSnapshot,
     },
     tree::{LayoutTree, TreeError},
 };
@@ -16,14 +16,13 @@ use crate::{
 struct WindowRecord {
     context: ContextKey,
     floating: bool,
-    min_width: i32,
-    min_height: i32,
 }
 
 #[derive(Clone, Debug)]
 struct TilingContext {
     work_area: crate::geometry::Rect,
     tree: LayoutTree,
+    maximized: Option<WindowId>,
 }
 
 #[derive(Debug, Error)]
@@ -87,29 +86,34 @@ impl EngineState {
                 }
             }
             Command::AddWindow { window, work_area } => {
-                self.add_window(window, work_area)?;
+                let context = self.add_window(window, work_area)?;
                 Response::Placements {
-                    placements: self.placements(),
+                    placements: self.placements_for(context),
                 }
             }
             Command::RemoveWindow { window_id } => {
-                self.remove_window(&window_id)?;
+                let context = self.remove_window(&window_id)?;
                 Response::Placements {
-                    placements: self.placements(),
+                    placements: self.placements_for(context),
                 }
             }
             Command::FocusWindow { window_id } => {
-                self.focus_window(&window_id)?;
-                Response::Ack
+                let context = self.focus_window(&window_id)?;
+                match context {
+                    Some(context) => Response::Placements {
+                        placements: self.placements_for(context),
+                    },
+                    None => Response::Ack,
+                }
             }
             Command::WindowContextChanged {
                 window_id,
                 context,
                 work_area,
             } => {
-                self.move_context(&window_id, context, work_area)?;
+                let contexts = self.move_context(&window_id, context, work_area)?;
                 Response::Placements {
-                    placements: self.placements(),
+                    placements: self.placements_for_contexts(&contexts),
                 }
             }
             Command::Relayout { context } => Response::Placements {
@@ -122,9 +126,18 @@ impl EngineState {
                 window_id,
                 direction,
             } => match self.directional_neighbor(&window_id, direction)? {
-                Some(window_id) => {
-                    debug!(event = "FOCUS", window_id = %window_id.0);
-                    Response::Focus { window_id }
+                Some(target) => {
+                    let context = self.windows[&window_id].context;
+                    let cancelled = self.focus_window(&target)?.is_some();
+                    debug!(event = "FOCUS", window_id = %target.0);
+                    if cancelled {
+                        Response::PlacementsAndFocus {
+                            placements: self.placements_for(context),
+                            window_id: target,
+                        }
+                    } else {
+                        Response::Focus { window_id: target }
+                    }
                 }
                 None => Response::Ack,
             },
@@ -132,38 +145,32 @@ impl EngineState {
                 window_id,
                 direction,
             } => {
-                self.swap_direction(&window_id, direction)?;
+                let context = self.swap_direction(&window_id, direction)?;
                 Response::Placements {
-                    placements: self.placements(),
+                    placements: self.placements_for(context),
                 }
             }
             Command::Resize {
                 window_id,
                 direction,
             } => {
-                self.resize(&window_id, direction)?;
+                let context = self.resize(&window_id, direction)?;
                 Response::Placements {
-                    placements: self.placements(),
+                    placements: self.placements_for(context),
                 }
             }
             Command::ToggleFloating { window_id } => {
-                self.toggle_floating(&window_id)?;
+                let context = self.toggle_floating(&window_id)?;
                 Response::Placements {
-                    placements: self.placements(),
+                    placements: self.placements_for(context),
                 }
             }
-            Command::ToggleGroup { window_id } => {
-                self.toggle_group(&window_id)?;
-                Response::Placements {
-                    placements: self.placements(),
-                }
-            }
-            Command::CycleGroup { window_id, cycle } => {
-                match self.cycle_group(&window_id, cycle)? {
-                    Some(window_id) => Response::Focus { window_id },
-                    None => Response::Ack,
-                }
-            }
+            Command::ToggleMaximize { window_id } => match self.toggle_maximize(&window_id)? {
+                Some(context) => Response::Placements {
+                    placements: self.placements_for(context),
+                },
+                None => Response::Ack,
+            },
         };
         self.debug_validate()?;
         Ok(response)
@@ -183,6 +190,7 @@ impl EngineState {
                 TilingContext {
                     work_area: area.rect,
                     tree: LayoutTree::new(),
+                    maximized: None,
                 },
             );
         }
@@ -234,12 +242,11 @@ impl EngineState {
             WindowRecord {
                 context: window.context,
                 floating,
-                min_width: window.min_width.max(0),
-                min_height: window.min_height.max(0),
             },
         );
-        if !floating {
-            self.insert_tiled(&window.id, window.context)?;
+        if !floating && let Err(error) = self.insert_tiled(&window.id, window.context) {
+            self.windows.remove(&window.id);
+            return Err(error);
         }
         Ok(())
     }
@@ -248,7 +255,7 @@ impl EngineState {
         &mut self,
         window: WindowSnapshot,
         work_area: crate::geometry::Rect,
-    ) -> Result<(), EngineError> {
+    ) -> Result<ContextKey, EngineError> {
         if !work_area.is_valid() {
             return Err(EngineError::InvalidWorkArea(
                 window.context.workspace,
@@ -261,56 +268,78 @@ impl EngineState {
             .or_insert_with(|| TilingContext {
                 work_area,
                 tree: LayoutTree::new(),
+                maximized: None,
             });
         let focused = window.focused;
         let window_id = window.id.clone();
+        let context_key = window.context;
         self.add_snapshot(window)?;
+        if !self.windows[&window_id].floating {
+            self.contexts
+                .get_mut(&context_key)
+                .expect("window context exists")
+                .maximized = None;
+        }
         if focused {
             self.focus_window(&window_id)?;
         }
         debug!(event = "WINDOW_ADD", window_id = %window_id.0);
-        Ok(())
+        Ok(context_key)
     }
 
-    fn remove_window(&mut self, window: &WindowId) -> Result<(), EngineError> {
+    fn remove_window(&mut self, window: &WindowId) -> Result<ContextKey, EngineError> {
         let record = self
             .windows
-            .remove(window)
+            .get(window)
+            .cloned()
             .ok_or_else(|| EngineError::UnknownWindow(window.clone()))?;
         if !record.floating {
-            self.contexts
-                .get_mut(&record.context)
-                .ok_or(EngineError::MissingContext(
-                    record.context.workspace,
-                    record.context.monitor,
-                ))?
-                .tree
-                .remove(window)?;
+            let context =
+                self.contexts
+                    .get_mut(&record.context)
+                    .ok_or(EngineError::MissingContext(
+                        record.context.workspace,
+                        record.context.monitor,
+                    ))?;
+            context.tree.remove(window)?;
+            if context.maximized.as_ref() == Some(window) {
+                context.maximized = None;
+            }
         }
+        self.windows.remove(window);
         if self.focused.as_ref() == Some(window) {
             self.focused = None;
         }
         debug!(event = "WINDOW_REMOVE", window_id = %window.0);
-        Ok(())
+        Ok(record.context)
     }
 
-    fn focus_window(&mut self, window: &WindowId) -> Result<(), EngineError> {
+    fn focus_window(&mut self, window: &WindowId) -> Result<Option<ContextKey>, EngineError> {
         let record = self
             .windows
             .get(window)
+            .cloned()
             .ok_or_else(|| EngineError::UnknownWindow(window.clone()))?;
         self.focused = Some(window.clone());
         if !record.floating {
-            self.contexts
-                .get_mut(&record.context)
-                .ok_or(EngineError::MissingContext(
-                    record.context.workspace,
-                    record.context.monitor,
-                ))?
-                .tree
-                .set_focused(window);
+            let context =
+                self.contexts
+                    .get_mut(&record.context)
+                    .ok_or(EngineError::MissingContext(
+                        record.context.workspace,
+                        record.context.monitor,
+                    ))?;
+            context.tree.set_focused(window);
+            if context
+                .maximized
+                .as_ref()
+                .is_some_and(|maximized| maximized != window)
+            {
+                context.maximized = None;
+                return Ok(Some(record.context));
+            }
         }
-        Ok(())
+        Ok(None)
     }
 
     fn insert_tiled(
@@ -318,11 +347,9 @@ impl EngineState {
         window: &WindowId,
         context_key: ContextKey,
     ) -> Result<(), EngineError> {
-        let record = self
-            .windows
+        self.windows
             .get(window)
             .ok_or_else(|| EngineError::UnknownWindow(window.clone()))?;
-        let min_size = (record.min_width, record.min_height);
         let focused = self.focused.as_ref().filter(|focused| {
             self.windows
                 .get(*focused)
@@ -335,13 +362,9 @@ impl EngineState {
                 context_key.workspace,
                 context_key.monitor,
             ))?;
-        context.tree.insert(
-            window.clone(),
-            focused,
-            context.work_area,
-            &self.config,
-            min_size,
-        )?;
+        context
+            .tree
+            .insert(window.clone(), focused, context.work_area, &self.config)?;
         Ok(())
     }
 
@@ -350,7 +373,7 @@ impl EngineState {
         window: &WindowId,
         new_context: ContextKey,
         work_area: crate::geometry::Rect,
-    ) -> Result<(), EngineError> {
+    ) -> Result<Vec<ContextKey>, EngineError> {
         if !work_area.is_valid() {
             return Err(EngineError::InvalidWorkArea(
                 new_context.workspace,
@@ -368,11 +391,21 @@ impl EngineState {
             .or_insert_with(|| TilingContext {
                 work_area,
                 tree: LayoutTree::new(),
+                maximized: None,
             });
 
         if record.context == new_context {
-            return Ok(());
+            return Ok(vec![new_context]);
         }
+        let old_context_state =
+            self.contexts
+                .get(&record.context)
+                .cloned()
+                .ok_or(EngineError::MissingContext(
+                    record.context.workspace,
+                    record.context.monitor,
+                ))?;
+        let new_context_state = self.contexts[&new_context].clone();
         if !record.floating {
             self.contexts
                 .get_mut(&record.context)
@@ -385,7 +418,23 @@ impl EngineState {
         }
         self.windows.get_mut(window).expect("record exists").context = new_context;
         if !record.floating {
-            self.insert_tiled(window, new_context)?;
+            if let Err(error) = self.insert_tiled(window, new_context) {
+                self.contexts.insert(record.context, old_context_state);
+                self.contexts.insert(new_context, new_context_state);
+                self.windows.get_mut(window).expect("record exists").context = record.context;
+                return Err(error);
+            }
+            let old_context = self
+                .contexts
+                .get_mut(&record.context)
+                .expect("old window context exists");
+            if old_context.maximized.as_ref() == Some(window) {
+                old_context.maximized = None;
+            }
+            self.contexts
+                .get_mut(&new_context)
+                .expect("new window context exists")
+                .maximized = None;
         }
         debug!(
             event = "WINDOW_MOVE_CONTEXT",
@@ -393,7 +442,7 @@ impl EngineState {
             workspace = new_context.workspace,
             monitor = new_context.monitor
         );
-        Ok(())
+        Ok(vec![record.context, new_context])
     }
 
     fn directional_neighbor(
@@ -427,36 +476,57 @@ impl EngineState {
         &mut self,
         window: &WindowId,
         direction: Direction,
-    ) -> Result<(), EngineError> {
+    ) -> Result<ContextKey, EngineError> {
+        let context_key = self
+            .windows
+            .get(window)
+            .ok_or_else(|| EngineError::UnknownWindow(window.clone()))?
+            .context;
+        let context = self
+            .contexts
+            .get_mut(&context_key)
+            .expect("window context exists");
+        if context.maximized.as_ref() == Some(window) {
+            context.maximized = None;
+        }
         let Some(neighbor) = self.directional_neighbor(window, direction)? else {
-            return Ok(());
+            return Ok(context_key);
         };
-        let context_key = self.windows[window].context;
         self.contexts
             .get_mut(&context_key)
             .expect("window context exists")
             .tree
             .swap(window, &neighbor)?;
-        Ok(())
+        Ok(context_key)
     }
 
-    fn resize(&mut self, window: &WindowId, direction: Direction) -> Result<(), EngineError> {
+    fn resize(
+        &mut self,
+        window: &WindowId,
+        direction: Direction,
+    ) -> Result<ContextKey, EngineError> {
         let record = self
             .windows
             .get(window)
+            .cloned()
             .ok_or_else(|| EngineError::UnknownWindow(window.clone()))?;
         if !record.floating {
-            self.contexts
+            let context = self
+                .contexts
                 .get_mut(&record.context)
-                .expect("window context exists")
+                .expect("window context exists");
+            if context.maximized.as_ref() == Some(window) {
+                context.maximized = None;
+            }
+            context
                 .tree
                 .resize(window, direction, self.config.resize_step)?;
             debug!(event = "RESIZE", window_id = %window.0, ?direction);
         }
-        Ok(())
+        Ok(record.context)
     }
 
-    fn toggle_floating(&mut self, window: &WindowId) -> Result<(), EngineError> {
+    fn toggle_floating(&mut self, window: &WindowId) -> Result<ContextKey, EngineError> {
         let record = self
             .windows
             .get(window)
@@ -467,66 +537,58 @@ impl EngineState {
                 .get_mut(window)
                 .expect("record exists")
                 .floating = false;
-            self.insert_tiled(window, record.context)?;
-        } else {
+            if let Err(error) = self.insert_tiled(window, record.context) {
+                self.windows
+                    .get_mut(window)
+                    .expect("record exists")
+                    .floating = true;
+                return Err(error);
+            }
             self.contexts
                 .get_mut(&record.context)
                 .expect("window context exists")
-                .tree
-                .remove(window)?;
+                .maximized = None;
+        } else {
+            let context = self
+                .contexts
+                .get_mut(&record.context)
+                .expect("window context exists");
+            context.tree.remove(window)?;
+            if context.maximized.as_ref() == Some(window) {
+                context.maximized = None;
+            }
             self.windows
                 .get_mut(window)
                 .expect("record exists")
                 .floating = true;
         }
         debug!(event = "FLOAT", window_id = %window.0, floating = !record.floating);
-        Ok(())
+        Ok(record.context)
     }
 
-    fn toggle_group(&mut self, window: &WindowId) -> Result<(), EngineError> {
+    fn toggle_maximize(&mut self, window: &WindowId) -> Result<Option<ContextKey>, EngineError> {
         let record = self
             .windows
             .get(window)
             .cloned()
             .ok_or_else(|| EngineError::UnknownWindow(window.clone()))?;
         if record.floating {
-            return Ok(());
+            debug!(event = "MAXIMIZE_IGNORED_FLOATING", window_id = %window.0);
+            return Ok(None);
         }
         let context = self
             .contexts
             .get_mut(&record.context)
             .expect("window context exists");
-        context
-            .tree
-            .toggle_group(window, context.work_area, &self.config)?;
-        debug!(event = "GROUP_TOGGLE", window_id = %window.0);
-        Ok(())
-    }
-
-    fn cycle_group(
-        &mut self,
-        window: &WindowId,
-        cycle: CycleDirection,
-    ) -> Result<Option<WindowId>, EngineError> {
-        let record = self
-            .windows
-            .get(window)
-            .cloned()
-            .ok_or_else(|| EngineError::UnknownWindow(window.clone()))?;
-        if record.floating {
-            return Ok(None);
+        if context.maximized.as_ref() == Some(window) {
+            context.maximized = None;
+        } else {
+            context.maximized = Some(window.clone());
+            context.tree.set_focused(window);
+            self.focused = Some(window.clone());
         }
-        let target = self
-            .contexts
-            .get_mut(&record.context)
-            .expect("window context exists")
-            .tree
-            .cycle_group(window, cycle == CycleDirection::Next)?;
-        if let Some(target) = &target {
-            self.focused = Some(target.clone());
-            debug!(event = "GROUP_CYCLE", window_id = %target.0);
-        }
-        Ok(target)
+        debug!(event = "MAXIMIZE", window_id = %window.0, maximized = context.maximized.is_some());
+        Ok(Some(record.context))
     }
 
     pub fn placements(&self) -> Vec<Placement> {
@@ -547,6 +609,13 @@ impl EngineState {
             self.config.outer_gap,
             self.config.inner_gap,
         );
+        if let Some(maximized) = &context.maximized
+            && let Some(placement) = placements
+                .iter_mut()
+                .find(|placement| &placement.window_id == maximized)
+        {
+            placement.rect = context.work_area;
+        }
         placements.sort_by(|a, b| a.window_id.cmp(&b.window_id));
         debug!(
             event = "LAYOUT",
@@ -557,10 +626,32 @@ impl EngineState {
         placements
     }
 
+    fn placements_for_contexts(&self, contexts: &[ContextKey]) -> Vec<Placement> {
+        let mut contexts = contexts.to_vec();
+        contexts.sort();
+        contexts.dedup();
+        contexts
+            .into_iter()
+            .flat_map(|context| self.placements_for(context))
+            .collect()
+    }
+
     pub fn validate_invariants(&self) -> Result<(), String> {
         let mut tiled = HashSet::new();
         for (key, context) in &self.contexts {
             context.tree.validate_invariants()?;
+            if let Some(maximized) = &context.maximized {
+                if !context.tree.contains(maximized) {
+                    return Err("maximized window is not tiled in its context".into());
+                }
+                let record = self
+                    .windows
+                    .get(maximized)
+                    .ok_or_else(|| "maximized window has no state record".to_string())?;
+                if record.floating || record.context != *key {
+                    return Err("maximized window has wrong context or is floating".into());
+                }
+            }
             for window in context.tree.windows.keys() {
                 if !tiled.insert(window.clone()) {
                     return Err("tiled window exists in multiple contexts".into());
@@ -598,6 +689,17 @@ impl EngineState {
 
     pub fn is_floating(&self, window: &WindowId) -> Option<bool> {
         self.windows.get(window).map(|record| record.floating)
+    }
+
+    pub fn maximized_window(&self, context: ContextKey) -> Option<&WindowId> {
+        self.contexts
+            .get(&context)
+            .and_then(|context| context.maximized.as_ref())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn tree(&self, context: ContextKey) -> Option<&LayoutTree> {
+        self.contexts.get(&context).map(|context| &context.tree)
     }
 
     fn debug_validate(&self) -> Result<(), EngineError> {

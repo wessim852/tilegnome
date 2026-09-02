@@ -26,8 +26,7 @@ pub enum Orientation {
 #[derive(Clone, Debug)]
 pub(crate) enum NodeKind {
     Leaf {
-        windows: Vec<WindowId>,
-        active: usize,
+        window: WindowId,
     },
     Split {
         orientation: Orientation,
@@ -49,6 +48,8 @@ pub enum TreeError {
     DuplicateWindow(WindowId),
     #[error("window is not tiled: {0:?}")]
     UnknownWindow(WindowId),
+    #[error("target rectangle {width}x{height} cannot be split into two positive rectangles")]
+    CannotSplit { width: i32, height: i32 },
     #[error("layout tree is corrupt: {0}")]
     Corrupt(String),
 }
@@ -79,16 +80,9 @@ impl LayoutTree {
     }
 
     pub fn set_focused(&mut self, window: &WindowId) {
-        let Some(&leaf) = self.windows.get(window) else {
-            return;
-        };
-        if let NodeKind::Leaf { windows, active } = &mut self.nodes[leaf].kind {
-            *active = windows
-                .iter()
-                .position(|candidate| candidate == window)
-                .unwrap_or(0);
+        if self.contains(window) {
+            self.last_focused = Some(window.clone());
         }
-        self.last_focused = Some(window.clone());
     }
 
     pub fn insert(
@@ -97,7 +91,6 @@ impl LayoutTree {
         focused: Option<&WindowId>,
         work_area: Rect,
         config: &Config,
-        min_size: (i32, i32),
     ) -> Result<(), TreeError> {
         if self.contains(&window) {
             return Err(TreeError::DuplicateWindow(window));
@@ -107,8 +100,7 @@ impl LayoutTree {
             let leaf = self.nodes.insert(Node {
                 parent: None,
                 kind: NodeKind::Leaf {
-                    windows: vec![window.clone()],
-                    active: 0,
+                    window: window.clone(),
                 },
             });
             self.root = Some(leaf);
@@ -127,7 +119,11 @@ impl LayoutTree {
             .or_else(|| {
                 rects
                     .iter()
-                    .max_by_key(|(_, rect)| rect.area())
+                    .max_by(|(left_id, left), (right_id, right)| {
+                        left.area()
+                            .cmp(&right.area())
+                            .then_with(|| right_id.cmp(left_id))
+                    })
                     .map(|(id, _)| id.clone())
             })
             .ok_or_else(|| TreeError::Corrupt("non-empty tree has no leaf".into()))?;
@@ -144,82 +140,21 @@ impl LayoutTree {
             Orientation::Horizontal => Orientation::Vertical,
             Orientation::Vertical => Orientation::Horizontal,
         };
-        let orientation = if split_fits(target_rect, preferred, config, min_size) {
+        let orientation = if split_fits(target_rect, preferred) {
             preferred
-        } else if split_fits(target_rect, alternate, config, min_size) {
+        } else if split_fits(target_rect, alternate) {
             alternate
         } else {
-            let root_rect = work_area.inset(config.outer_gap);
-            let root_preferred = if config.smart_split && root_rect.height > root_rect.width {
-                Orientation::Vertical
-            } else {
-                Orientation::Horizontal
-            };
-            let root_alternate = match root_preferred {
-                Orientation::Horizontal => Orientation::Vertical,
-                Orientation::Vertical => Orientation::Horizontal,
-            };
-            // ponytail: this guarantees the new client's hints; track constraints per
-            // tree leaf if constrained existing clients later need global reflow.
-            let root_orientation = [root_preferred, root_alternate]
-                .into_iter()
-                .find(|orientation| split_fits(root_rect, *orientation, config, min_size));
-            if let Some(root_orientation) = root_orientation {
-                self.wrap_root(window.clone(), root_orientation, config.split_ratio)?;
-                self.last_focused = Some(window);
-                debug!(event = "TREE_INSERT_ROOT_FALLBACK", windows = self.len());
-                self.debug_validate();
-                return Ok(());
-            }
-            preferred
+            return Err(TreeError::CannotSplit {
+                width: target_rect.width,
+                height: target_rect.height,
+            });
         };
+
         self.split_leaf(&target, window.clone(), orientation, config.split_ratio)?;
         self.last_focused = Some(window);
         debug!(event = "TREE_INSERT", windows = self.len());
         self.debug_validate();
-        Ok(())
-    }
-
-    fn wrap_root(
-        &mut self,
-        window: WindowId,
-        orientation: Orientation,
-        ratio: f64,
-    ) -> Result<(), TreeError> {
-        let old_root = self
-            .root
-            .ok_or_else(|| TreeError::Corrupt("non-empty tree has no root".into()))?;
-        if let NodeKind::Split {
-            orientation: old_orientation,
-            ..
-        } = &mut self.nodes[old_root].kind
-            && *old_orientation == orientation
-        {
-            *old_orientation = match orientation {
-                Orientation::Horizontal => Orientation::Vertical,
-                Orientation::Vertical => Orientation::Horizontal,
-            };
-        }
-        let new_leaf = self.nodes.insert(Node {
-            parent: None,
-            kind: NodeKind::Leaf {
-                windows: vec![window.clone()],
-                active: 0,
-            },
-        });
-        let new_root = self.nodes.insert(Node {
-            parent: None,
-            kind: NodeKind::Split {
-                orientation,
-                ratio: ratio.clamp(MIN_RATIO, MAX_RATIO),
-                first: old_root,
-                second: new_leaf,
-            },
-        });
-        self.nodes[old_root].parent = Some(new_root);
-        self.nodes[new_leaf].parent = Some(new_root);
-        self.root = Some(new_root);
-        self.windows.insert(window, new_leaf);
         Ok(())
     }
 
@@ -235,11 +170,23 @@ impl LayoutTree {
             .get(target)
             .ok_or_else(|| TreeError::UnknownWindow(target.clone()))?;
         let old_parent = self.nodes[old_leaf].parent;
+        let replace_first = if let Some(parent) = old_parent {
+            match self.nodes[parent].kind {
+                NodeKind::Split { first, .. } if first == old_leaf => Some(true),
+                NodeKind::Split { second, .. } if second == old_leaf => Some(false),
+                _ => {
+                    return Err(TreeError::Corrupt(
+                        "leaf parent does not reference leaf".into(),
+                    ));
+                }
+            }
+        } else {
+            None
+        };
         let new_leaf = self.nodes.insert(Node {
             parent: None,
             kind: NodeKind::Leaf {
-                windows: vec![window.clone()],
-                active: 0,
+                window: window.clone(),
             },
         });
         let split = self.nodes.insert(Node {
@@ -255,14 +202,16 @@ impl LayoutTree {
         self.nodes[new_leaf].parent = Some(split);
 
         if let Some(parent) = old_parent {
-            match &mut self.nodes[parent].kind {
-                NodeKind::Split { first, second, .. } if *first == old_leaf => *first = split,
-                NodeKind::Split { first, second, .. } if *second == old_leaf => *second = split,
-                _ => {
-                    return Err(TreeError::Corrupt(
-                        "leaf parent does not reference leaf".into(),
-                    ));
-                }
+            if replace_first == Some(true) {
+                let NodeKind::Split { first, .. } = &mut self.nodes[parent].kind else {
+                    unreachable!("parent was validated above");
+                };
+                *first = split;
+            } else {
+                let NodeKind::Split { second, .. } = &mut self.nodes[parent].kind else {
+                    unreachable!("parent was validated above");
+                };
+                *second = split;
             }
         } else {
             self.root = Some(split);
@@ -272,29 +221,10 @@ impl LayoutTree {
     }
 
     pub fn remove(&mut self, window: &WindowId) -> Result<(), TreeError> {
-        let leaf = self
+        let leaf = *self
             .windows
-            .remove(window)
+            .get(window)
             .ok_or_else(|| TreeError::UnknownWindow(window.clone()))?;
-        if let NodeKind::Leaf { windows, active } = &mut self.nodes[leaf].kind
-            && windows.len() > 1
-        {
-            let removed = windows
-                .iter()
-                .position(|candidate| candidate == window)
-                .ok_or_else(|| TreeError::Corrupt("window lookup points to wrong group".into()))?;
-            windows.remove(removed);
-            if removed < *active {
-                *active -= 1;
-            } else if *active >= windows.len() {
-                *active = windows.len() - 1;
-            }
-            if self.last_focused.as_ref() == Some(window) {
-                self.last_focused = windows.get(*active).cloned();
-            }
-            self.debug_validate();
-            return Ok(());
-        }
         let parent = self.nodes[leaf].parent;
 
         if let Some(parent) = parent {
@@ -304,14 +234,21 @@ impl LayoutTree {
                     return Err(TreeError::Corrupt("leaf parent is not a split".into()));
                 }
             };
-            let sibling = if first == leaf { second } else { first };
+            let sibling = if first == leaf {
+                second
+            } else if second == leaf {
+                first
+            } else {
+                return Err(TreeError::Corrupt(
+                    "leaf parent does not reference leaf".into(),
+                ));
+            };
             let grandparent = self.nodes[parent].parent;
-            self.nodes[sibling].parent = grandparent;
 
             if let Some(grandparent) = grandparent {
                 match &mut self.nodes[grandparent].kind {
-                    NodeKind::Split { first, second, .. } if *first == parent => *first = sibling,
-                    NodeKind::Split { first, second, .. } if *second == parent => *second = sibling,
+                    NodeKind::Split { first, .. } if *first == parent => *first = sibling,
+                    NodeKind::Split { second, .. } if *second == parent => *second = sibling,
                     _ => {
                         return Err(TreeError::Corrupt(
                             "split parent does not reference split".into(),
@@ -321,16 +258,18 @@ impl LayoutTree {
             } else {
                 self.root = Some(sibling);
             }
+            self.nodes[sibling].parent = grandparent;
             self.nodes.remove(leaf);
             self.nodes.remove(parent);
-            debug!(event = "TREE_COLLAPSE", windows = self.len());
+            debug!(event = "TREE_COLLAPSE", windows = self.len() - 1);
         } else {
             self.nodes.remove(leaf);
             self.root = None;
         }
 
+        self.windows.remove(window);
         if self.last_focused.as_ref() == Some(window) {
-            self.last_focused = self.windows.keys().next().cloned();
+            self.last_focused = self.windows.keys().min().cloned();
         }
         debug!(event = "TREE_REMOVE", windows = self.len());
         self.debug_validate();
@@ -354,158 +293,25 @@ impl LayoutTree {
             .get(second_window)
             .ok_or_else(|| TreeError::UnknownWindow(second_window.clone()))?;
         if first_key == second_key {
-            return Ok(());
+            return Err(TreeError::Corrupt(
+                "different windows point to the same leaf".into(),
+            ));
         }
-
-        let first_kind = self.nodes[first_key].kind.clone();
-        let second_kind = self.nodes[second_key].kind.clone();
-        if !matches!(first_kind, NodeKind::Leaf { .. })
-            || !matches!(second_kind, NodeKind::Leaf { .. })
+        if !matches!(self.nodes[first_key].kind, NodeKind::Leaf { .. })
+            || !matches!(self.nodes[second_key].kind, NodeKind::Leaf { .. })
         {
             return Err(TreeError::Corrupt("window lookup points to a split".into()));
         }
-        self.nodes[first_key].kind = second_kind;
-        self.nodes[second_key].kind = first_kind;
-        self.remap_leaf(first_key)?;
-        self.remap_leaf(second_key)?;
+
+        self.nodes[first_key].kind = NodeKind::Leaf {
+            window: second_window.clone(),
+        };
+        self.nodes[second_key].kind = NodeKind::Leaf {
+            window: first_window.clone(),
+        };
+        self.windows.insert(first_window.clone(), second_key);
+        self.windows.insert(second_window.clone(), first_key);
         self.debug_validate();
-        Ok(())
-    }
-
-    pub fn toggle_group(
-        &mut self,
-        window: &WindowId,
-        work_area: Rect,
-        config: &Config,
-    ) -> Result<bool, TreeError> {
-        let leaf = *self
-            .windows
-            .get(window)
-            .ok_or_else(|| TreeError::UnknownWindow(window.clone()))?;
-        let grouped = matches!(
-            &self.nodes[leaf].kind,
-            NodeKind::Leaf { windows, .. } if windows.len() > 1
-        );
-        if grouped {
-            self.ungroup_leaf(leaf, window, work_area, config)?;
-        } else if !self.group_parent(leaf, window)? {
-            return Ok(false);
-        }
-        self.debug_validate();
-        Ok(true)
-    }
-
-    pub fn cycle_group(
-        &mut self,
-        window: &WindowId,
-        forward: bool,
-    ) -> Result<Option<WindowId>, TreeError> {
-        let leaf = *self
-            .windows
-            .get(window)
-            .ok_or_else(|| TreeError::UnknownWindow(window.clone()))?;
-        let NodeKind::Leaf { windows, active } = &mut self.nodes[leaf].kind else {
-            return Err(TreeError::Corrupt("window lookup points to a split".into()));
-        };
-        if windows.len() < 2 {
-            return Ok(None);
-        }
-        *active = if forward {
-            (*active + 1) % windows.len()
-        } else {
-            (*active + windows.len() - 1) % windows.len()
-        };
-        let target = windows[*active].clone();
-        self.last_focused = Some(target.clone());
-        Ok(Some(target))
-    }
-
-    fn group_parent(&mut self, leaf: NodeKey, focused: &WindowId) -> Result<bool, TreeError> {
-        let Some(parent) = self.nodes[leaf].parent else {
-            return Ok(false);
-        };
-        let mut windows = Vec::new();
-        self.collect_windows(parent, &mut windows)?;
-        let active = windows
-            .iter()
-            .position(|window| window == focused)
-            .ok_or_else(|| TreeError::Corrupt("focused window missing from group".into()))?;
-        let mut descendants = Vec::new();
-        self.collect_descendants(parent, &mut descendants)?;
-        for key in descendants {
-            self.nodes.remove(key);
-        }
-        self.nodes[parent].kind = NodeKind::Leaf {
-            windows: windows.clone(),
-            active,
-        };
-        for window in windows {
-            self.windows.insert(window, parent);
-        }
-        self.last_focused = Some(focused.clone());
-        Ok(true)
-    }
-
-    fn ungroup_leaf(
-        &mut self,
-        leaf: NodeKey,
-        focused: &WindowId,
-        work_area: Rect,
-        config: &Config,
-    ) -> Result<(), TreeError> {
-        let NodeKind::Leaf { windows, .. } = &self.nodes[leaf].kind else {
-            return Err(TreeError::Corrupt("window lookup points to a split".into()));
-        };
-        let members = windows.clone();
-        self.nodes[leaf].kind = NodeKind::Leaf {
-            windows: vec![members[0].clone()],
-            active: 0,
-        };
-        for member in &members[1..] {
-            self.windows.remove(member);
-        }
-        self.windows.insert(members[0].clone(), leaf);
-        let mut target = members[0].clone();
-        for member in members.into_iter().skip(1) {
-            self.insert(member.clone(), Some(&target), work_area, config, (0, 0))?;
-            target = member;
-        }
-        self.set_focused(focused);
-        Ok(())
-    }
-
-    fn collect_windows(&self, key: NodeKey, output: &mut Vec<WindowId>) -> Result<(), TreeError> {
-        match &self.nodes[key].kind {
-            NodeKind::Leaf { windows, .. } => output.extend(windows.iter().cloned()),
-            NodeKind::Split { first, second, .. } => {
-                self.collect_windows(*first, output)?;
-                self.collect_windows(*second, output)?;
-            }
-        }
-        Ok(())
-    }
-
-    fn collect_descendants(
-        &self,
-        key: NodeKey,
-        output: &mut Vec<NodeKey>,
-    ) -> Result<(), TreeError> {
-        if let NodeKind::Split { first, second, .. } = self.nodes[key].kind {
-            self.collect_descendants(first, output)?;
-            self.collect_descendants(second, output)?;
-            output.push(first);
-            output.push(second);
-        }
-        Ok(())
-    }
-
-    fn remap_leaf(&mut self, key: NodeKey) -> Result<(), TreeError> {
-        let NodeKind::Leaf { windows, .. } = &self.nodes[key].kind else {
-            return Err(TreeError::Corrupt("expected leaf".into()));
-        };
-        for window in windows.clone() {
-            self.windows.insert(window, key);
-        }
         Ok(())
     }
 
@@ -562,6 +368,9 @@ impl LayoutTree {
         }
 
         let root = self.root.expect("checked above");
+        if self.nodes.get(root).is_none() {
+            return Err("root references a missing node".into());
+        }
         if self.nodes[root].parent.is_some() {
             return Err("root has a parent".into());
         }
@@ -571,21 +380,16 @@ impl LayoutTree {
         let mut leaves = HashMap::new();
         while let Some(key) = stack.pop() {
             if !visited.insert(key) {
-                return Err("node is reachable more than once".into());
+                return Err("node is reachable more than once or the tree contains a cycle".into());
             }
             let node = self
                 .nodes
                 .get(key)
                 .ok_or_else(|| "tree references missing node".to_string())?;
             match &node.kind {
-                NodeKind::Leaf { windows, active } => {
-                    if windows.is_empty() || *active >= windows.len() {
-                        return Err("group leaf is empty or has an invalid active index".into());
-                    }
-                    for window in windows {
-                        if leaves.insert(window.clone(), key).is_some() {
-                            return Err("window appears in multiple leaves".into());
-                        }
+                NodeKind::Leaf { window } => {
+                    if leaves.insert(window.clone(), key).is_some() {
+                        return Err("window appears in multiple leaves".into());
                     }
                 }
                 NodeKind::Split {
@@ -628,15 +432,9 @@ impl LayoutTree {
     }
 }
 
-fn split_fits(
-    rect: Rect,
-    orientation: Orientation,
-    config: &Config,
-    (min_width, min_height): (i32, i32),
-) -> bool {
-    let (_, second) = match orientation {
-        Orientation::Horizontal => rect.split_horizontal(config.split_ratio, config.inner_gap),
-        Orientation::Vertical => rect.split_vertical(config.split_ratio, config.inner_gap),
-    };
-    second.width >= min_width.max(0) && second.height >= min_height.max(0)
+fn split_fits(rect: Rect, orientation: Orientation) -> bool {
+    match orientation {
+        Orientation::Horizontal => rect.width >= 2,
+        Orientation::Vertical => rect.height >= 2,
+    }
 }

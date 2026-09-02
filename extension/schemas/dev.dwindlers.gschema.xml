@@ -49,8 +49,5 @@
     <key name="dwindle-resize-right" type="as"><default>['&lt;Super&gt;&lt;Control&gt;l']</default></key>
     <key name="dwindle-toggle-floating" type="as"><default>['&lt;Super&gt;&lt;Alt&gt;space']</default></key>
     <key name="dwindle-toggle-fullscreen" type="as"><default>['&lt;Super&gt;f']</default></key>
-    <key name="dwindle-toggle-group" type="as"><default>['&lt;Super&gt;g']</default></key>
-    <key name="dwindle-group-next" type="as"><default>['&lt;Super&gt;&lt;Alt&gt;j']</default></key>
-    <key name="dwindle-group-previous" type="as"><default>['&lt;Super&gt;&lt;Alt&gt;k']</default></key>
   </schema>
 </schemalist>

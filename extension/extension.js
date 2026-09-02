@@ -31,7 +31,6 @@ export default class DwindleExtension extends Extension {
         this._registry = new WindowRegistry();
         this._borders = new WindowBorders();
         this._trackedWindows = new Set();
-        this._maximizedWindows = new Set();
         this._windowSources = new Map();
         this._placementSources = new Map();
         this._stalePlacements = new Set();
@@ -68,7 +67,6 @@ export default class DwindleExtension extends Extension {
         this._borders.clear();
         this._registry.clear();
         this._trackedWindows.clear();
-        this._maximizedWindows.clear();
 
         this._keybindings = null;
         this._client = null;
@@ -99,7 +97,8 @@ export default class DwindleExtension extends Extension {
         });
         this._signals.connect(display, 'workareas-changed', () => {
             this._readinessExhausted.clear();
-            this._scheduleFullSync();
+            for (const window of this._registry.values())
+                this._scheduleContext(window);
         });
 
         const monitorManager = global.backend.get_monitor_manager();
@@ -143,27 +142,18 @@ export default class DwindleExtension extends Extension {
         this._signals.connect(window, 'notify::window-type', () => this._scheduleEligibility(window));
         this._signals.connect(window, 'notify::mapped', () => this._scheduleContext(window));
         this._signals.connect(window, 'notify::resizeable', () => this._scheduleEligibility(window));
-        const maximizedChanged = () => {
-            if (this._maximizedWindows.has(window))
-                this._scheduleWindow(window, () => this._updateBorder(window));
-            else
-                this._scheduleContext(window);
-        };
-        this._signals.connect(window, 'notify::maximized-horizontally', maximizedChanged);
-        this._signals.connect(window, 'notify::maximized-vertically', maximizedChanged);
-        const geometryChanged = () => {
-            if (this._maximizedWindows.has(window))
-                this._updateBorder(window);
-        };
-        this._signals.connect(window, 'position-changed', geometryChanged);
-        this._signals.connect(window, 'size-changed', geometryChanged);
+        this._signals.connect(window, 'notify::maximized-horizontally', () => {
+            this._scheduleContext(window);
+        });
+        this._signals.connect(window, 'notify::maximized-vertically', () => {
+            this._scheduleContext(window);
+        });
     }
 
     _onUnmanaged(window) {
         this._cancelWindowSource(window);
         this._cancelPlacement(window);
         this._readinessExhausted.delete(window);
-        this._maximizedWindows.delete(window);
         this._borders.remove(window);
         this._trackedWindows.delete(window);
         this._signals.disconnectObject(window);
@@ -234,7 +224,6 @@ export default class DwindleExtension extends Extension {
             });
         } catch (error) {
             console.warn(`[DwindleRS] window context unavailable: ${error.message}`);
-            this._scheduleFullSync();
         }
     }
 
@@ -247,7 +236,6 @@ export default class DwindleExtension extends Extension {
                 callback();
             } catch (error) {
                 console.warn(`[DwindleRS] window event skipped: ${error.message}`);
-                this._scheduleFullSync();
             }
             return GLib.SOURCE_REMOVE;
         };
@@ -359,28 +347,13 @@ export default class DwindleExtension extends Extension {
         const window = global.display.get_focus_window();
         if (!window)
             return;
-        if (action === 'toggle_maximize') {
-            const managed = this._maximizedWindows.delete(window);
-            if (managed || window.is_maximized()) {
-                window.unmaximize();
-                this._scheduleContext(window);
-            } else {
-                this._maximizedWindows.add(window);
-                this._cancelPlacement(window);
-                window.maximize();
-                this._scheduleWindow(window, () => this._updateBorder(window));
-            }
-            return;
-        }
         if (!this._registry.has(window))
             return;
         const command = {
             command: action,
             window_id: windowId(window),
         };
-        if (action === 'cycle_group')
-            command.cycle = direction;
-        else if (direction)
+        if (direction)
             command.direction = direction;
         this._send(command);
     }
@@ -395,7 +368,7 @@ export default class DwindleExtension extends Extension {
                 if (this._destroyed || generation !== this._generation)
                     return;
                 this._daemonWarned = false;
-                this._handleResponse(JSON.parse(json), command);
+                this._handleResponse(JSON.parse(json));
             } catch (error) {
                 if (this._destroyed || generation !== this._generation)
                     return;
@@ -407,7 +380,7 @@ export default class DwindleExtension extends Extension {
         });
     }
 
-    _handleResponse(response, command = null) {
+    _handleResponse(response) {
         if (!response || typeof response !== 'object' || typeof response.type !== 'string')
             throw new Error('malformed daemon response');
         switch (response.type) {
@@ -425,8 +398,6 @@ export default class DwindleExtension extends Extension {
             break;
         case 'error':
             console.warn(`[DwindleRS] engine error: ${String(response.message)}`);
-            if (command?.command !== 'full_sync')
-                this._scheduleFullSync();
             break;
         default:
             throw new Error(`unknown daemon response: ${response.type}`);
@@ -470,10 +441,6 @@ export default class DwindleExtension extends Extension {
         try {
             if (window.is_fullscreen())
                 return;
-            if (this._maximizedWindows.has(window)) {
-                this._updateBorder(window);
-                return;
-            }
             const maximized = window.is_maximized();
             if (maximized)
                 window.unmaximize();
@@ -488,7 +455,6 @@ export default class DwindleExtension extends Extension {
             this._updateBorder(window);
         } catch (error) {
             console.warn(`[DwindleRS] placement skipped: ${error.message}`);
-            this._scheduleFullSync();
             return;
         }
         // ponytail: six attempts cover Wayland map/maximize handshakes; use
@@ -536,6 +502,6 @@ export default class DwindleExtension extends Extension {
         if (window)
             window.activate(global.get_current_time());
         else
-            this._scheduleFullSync();
+            console.warn('[DwindleRS] stale focus target skipped');
     }
 }

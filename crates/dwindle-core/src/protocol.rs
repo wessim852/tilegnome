@@ -31,13 +31,6 @@ pub enum Direction {
     Right,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CycleDirection {
-    Previous,
-    Next,
-}
-
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct Config {
     pub inner_gap: i32,
@@ -148,12 +141,8 @@ pub enum Command {
     ToggleFloating {
         window_id: WindowId,
     },
-    ToggleGroup {
+    ToggleMaximize {
         window_id: WindowId,
-    },
-    CycleGroup {
-        window_id: WindowId,
-        cycle: CycleDirection,
     },
 }
 

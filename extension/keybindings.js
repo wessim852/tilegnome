@@ -18,9 +18,6 @@ const BINDINGS = {
     'dwindle-resize-right': ['resize', 'right'],
     'dwindle-toggle-floating': ['toggle_floating', null],
     'dwindle-toggle-fullscreen': ['toggle_maximize', null],
-    'dwindle-toggle-group': ['toggle_group', null],
-    'dwindle-group-next': ['cycle_group', 'next'],
-    'dwindle-group-previous': ['cycle_group', 'previous'],
 };
 
 export class Keybindings {

@@ -59,9 +59,7 @@ Re-run `install-extension.sh` after editing GJS or schemas; it disables the old 
 | Swap left/down/up/right | `Super+Shift+H/J/K/L` |
 | Resize left/down/up/right | `Super+Ctrl+H/J/K/L` |
 | Toggle floating | `Super+Alt+Space` |
-| Toggle maximized | `Super+F` |
-| Group/ungroup focused subtree | `Super+G` |
-| Previous/next window in group | `Super+Alt+K/J` |
+| Toggle layout maximize | `Super+F` |
 
 The installed GNOME 50 configuration reserves `Super+H` for minimize, `Super+L` for locking the session, and `Super+Shift+Space` for reverse input-source switching. Those defaults are avoided. To reclaim two of them intentionally, clear GNOME's bindings and change this extension's settings:
 
@@ -131,8 +129,8 @@ The script starts both `dwindle-daemon` and `gnome-shell --devkit --wayland --no
 8. Move a tiled window to another workspace. Visit both workspaces and confirm each context is complete.
 9. Test focus with `Super+Alt+H` for left, `Super+J/K` for down/up, and `Super+Alt+L` for right.
 10. Test swaps with `Super+Shift+H/J/K/L` and ratio changes with `Super+Ctrl+H/J/K/L`.
-11. Press `Super+F` on one window. Confirm it maximizes over the layout; press it again and confirm the tiled geometry is restored.
-12. Press `Super+G` on a tiled window. Confirm its sibling subtree shares one rectangle, then cycle the visible member with `Super+Alt+J/K`; press `Super+G` again to restore separate leaves.
+11. Press `Super+F` on one window. Confirm it fills that monitor's work area while the top bar remains visible; press it again and confirm the exact tiled tree and ratios are restored.
+12. While a window is layout-maximized, focus a tiled neighbor directionally. Confirm the normal layout returns and the neighbor receives focus.
 13. Toggle floating with `Super+Alt+Space`, move/resize the window, then toggle again and confirm it rejoins the focused context.
 14. Disable the extension, exercise GNOME normally, and confirm no shortcut remains active. Re-enable it and confirm current windows are tiled by FullSync.
 15. Stop and restart the Rust daemon while windows remain open. Confirm the extension logs reconnection and reconstructs every workspace/monitor context.
@@ -142,7 +140,7 @@ The script starts both `dwindle-daemon` and `gnome-shell --devkit --wayland --no
 
 - FullSync and monitor topology changes rebuild trees deterministically; they do not preserve the exact previous split tree.
 - Floating state is in Rust and is intentionally not persisted. A daemon/extension restart tiles eligible floating windows again.
-- Tab groups are rebuilt as ordinary dwindle leaves after a daemon or extension restart.
+- Tab grouping is temporarily disabled: the previous implementation put multiple windows in one leaf, which violates the BSP invariant. A future grouping layer must not alter the one-window-per-leaf tree.
 - Directional focus stays within one workspace/monitor context.
 - Mouse grabs only migrate context or restore the existing layout; there are no drop targets or insertion previews.
 - Mutter/client minimum-size constraints may prevent a client from matching a very small calculated rectangle exactly.
