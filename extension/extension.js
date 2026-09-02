@@ -31,7 +31,7 @@ export default class DwindleExtension extends Extension {
         this._registry = new WindowRegistry();
         this._borders = new WindowBorders();
         this._trackedWindows = new Set();
-        this._newWindows = new Set();
+        this._maximizedWindows = new Set();
         this._windowSources = new Map();
         this._placementSources = new Map();
         this._stalePlacements = new Set();
@@ -68,7 +68,7 @@ export default class DwindleExtension extends Extension {
         this._borders.clear();
         this._registry.clear();
         this._trackedWindows.clear();
-        this._newWindows.clear();
+        this._maximizedWindows.clear();
 
         this._keybindings = null;
         this._client = null;
@@ -82,7 +82,6 @@ export default class DwindleExtension extends Extension {
     _connectSignals() {
         const display = global.display;
         this._signals.connect(display, 'window-created', (_display, window) => {
-            this._newWindows.add(window);
             this._scheduleWindow(window, () => {
                 this._trackWindow(window);
                 this._syncEligibility(window);
@@ -144,15 +143,21 @@ export default class DwindleExtension extends Extension {
         this._signals.connect(window, 'notify::window-type', () => this._scheduleEligibility(window));
         this._signals.connect(window, 'notify::mapped', () => this._scheduleContext(window));
         this._signals.connect(window, 'notify::resizeable', () => this._scheduleEligibility(window));
-        this._signals.connect(window, 'notify::maximized-horizontally', () => this._scheduleContext(window));
-        this._signals.connect(window, 'notify::maximized-vertically', () => this._scheduleContext(window));
+        const maximizedChanged = () => {
+            if (this._maximizedWindows.has(window))
+                this._scheduleWindow(window, () => this._updateBorder(window));
+            else
+                this._scheduleContext(window);
+        };
+        this._signals.connect(window, 'notify::maximized-horizontally', maximizedChanged);
+        this._signals.connect(window, 'notify::maximized-vertically', maximizedChanged);
     }
 
     _onUnmanaged(window) {
         this._cancelWindowSource(window);
         this._cancelPlacement(window);
         this._readinessExhausted.delete(window);
-        this._newWindows.delete(window);
+        this._maximizedWindows.delete(window);
         this._borders.remove(window);
         this._trackedWindows.delete(window);
         this._signals.disconnectObject(window);
@@ -166,15 +171,6 @@ export default class DwindleExtension extends Extension {
     _syncEligibility(window, attempt = 0) {
         if (this._destroyed)
             return;
-        if (attempt === 0 && this._newWindows.delete(window) && window.is_fullscreen()) {
-            window.unmake_fullscreen();
-            this._scheduleWindow(
-                window,
-                () => this._syncEligibility(window, attempt + 1),
-                WINDOW_READY_RETRY_MS
-            );
-            return;
-        }
         const enabled = this._settings.get_boolean('enabled');
         const ignored = ignoredApps(this._settings);
         const candidate = enabled && isTileCandidate(window, ignored);
@@ -357,12 +353,16 @@ export default class DwindleExtension extends Extension {
         const window = global.display.get_focus_window();
         if (!window)
             return;
-        if (action === 'toggle_fullscreen') {
-            if (window.is_fullscreen())
-                window.unmake_fullscreen();
-            else {
-                this._borders.remove(window);
-                window.make_fullscreen();
+        if (action === 'toggle_maximize') {
+            const managed = this._maximizedWindows.delete(window);
+            if (managed || window.is_maximized()) {
+                window.unmaximize();
+                this._scheduleContext(window);
+            } else {
+                this._maximizedWindows.add(window);
+                this._cancelPlacement(window);
+                window.maximize();
+                this._scheduleWindow(window, () => this._updateBorder(window));
             }
             return;
         }
@@ -464,6 +464,10 @@ export default class DwindleExtension extends Extension {
         try {
             if (window.is_fullscreen())
                 return;
+            if (this._maximizedWindows.has(window)) {
+                this._updateBorder(window);
+                return;
+            }
             const maximized = window.is_maximized();
             if (maximized)
                 window.unmaximize();

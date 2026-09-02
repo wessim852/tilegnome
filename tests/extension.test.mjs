@@ -180,6 +180,7 @@ const ExtensionClass = sandbox.DwindleExtension;
     const extension = Object.assign(Object.create(ExtensionClass.prototype), {
         _destroyed: false,
         _placementSources: new Map(),
+        _maximizedWindows: new Set(),
         _registry: {has: candidate => candidate === window},
         _updateBorder() {},
     });
@@ -214,25 +215,37 @@ const ExtensionClass = sandbox.DwindleExtension;
 }
 
 {
-    let madeFullscreen = 0;
-    let bordersRemoved = 0;
+    let maximized = false;
+    let placementsCancelled = 0;
+    let contextRefreshes = 0;
+    let borderUpdates = 0;
     const window = {
-        is_fullscreen: () => false,
-        make_fullscreen() {
-            madeFullscreen++;
+        is_maximized: () => maximized,
+        maximize() {
+            maximized = true;
+        },
+        unmaximize() {
+            maximized = false;
         },
     };
     sandbox.global.display = {get_focus_window: () => window};
     const extension = Object.assign(Object.create(ExtensionClass.prototype), {
         _settings: {get_boolean: () => true},
-        _borders: {remove: candidate => {
-            assert.equal(candidate, window);
-            bordersRemoved++;
-        }},
+        _maximizedWindows: new Set(),
+        _cancelPlacement: () => placementsCancelled++,
+        _scheduleWindow: (_window, callback) => callback(),
+        _scheduleContext: () => contextRefreshes++,
+        _updateBorder: () => borderUpdates++,
     });
-    extension._onKeybinding('toggle_fullscreen');
-    assert.equal(bordersRemoved, 1);
-    assert.equal(madeFullscreen, 1);
+    extension._onKeybinding('toggle_maximize');
+    assert.equal(maximized, true);
+    assert.equal(extension._maximizedWindows.has(window), true);
+    assert.equal(placementsCancelled, 1);
+    assert.equal(borderUpdates, 1);
+    extension._onKeybinding('toggle_maximize');
+    assert.equal(maximized, false);
+    assert.equal(extension._maximizedWindows.has(window), false);
+    assert.equal(contextRefreshes, 1);
 }
 
 {
@@ -254,7 +267,6 @@ const ExtensionClass = sandbox.DwindleExtension;
     const extension = Object.assign(Object.create(ExtensionClass.prototype), {
         _destroyed: false,
         _settings: {get_boolean: () => true},
-        _newWindows: new Set(),
         _registry: {has: () => false},
         _readinessExhausted: new Set(),
         _scheduleWindow() {
@@ -267,27 +279,6 @@ const ExtensionClass = sandbox.DwindleExtension;
     extension._scheduleEligibility(window);
     assert.equal(extension._readinessExhausted.has(window), false);
     assert.equal(schedules, 1);
-}
-
-{
-    const window = {
-        is_fullscreen: () => true,
-        unmake_fullscreen() {
-            this.unmade = true;
-        },
-    };
-    let scheduled;
-    const extension = Object.assign(Object.create(ExtensionClass.prototype), {
-        _destroyed: false,
-        _newWindows: new Set([window]),
-        _scheduleWindow(_window, callback) {
-            scheduled = callback;
-        },
-    });
-    extension._syncEligibility(window);
-    assert.equal(window.unmade, true);
-    assert.equal(typeof scheduled, 'function');
-    assert.equal(extension._newWindows.has(window), false);
 }
 
 {
