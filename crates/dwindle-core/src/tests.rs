@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::{
-    EngineState, LayoutTree, Rect,
+    EngineError, EngineState, LayoutTree, Rect,
     navigation::best_candidate,
     protocol::{
         Command, Config, ContextKey, CycleDirection, Direction, Response, Snapshot, WindowId,
@@ -501,6 +501,29 @@ fn full_sync_rebuilds_all_contexts_and_focus() {
     assert_eq!(state.context_len(c0), 2);
     assert_eq!(state.context_len(c1), 1);
     assert_eq!(state.placements().len(), 3);
+    state.validate_invariants().unwrap();
+}
+
+#[test]
+fn failed_full_sync_keeps_the_previous_state() {
+    let key = context(0, 0);
+    let mut state = synced_state(&[(key, area())]);
+    add(&mut state, "A", key, true, area());
+    let before = state.placements();
+
+    let result = state.apply(Command::FullSync {
+        snapshot: Snapshot {
+            work_areas: vec![WorkAreaSnapshot {
+                context: key,
+                rect: area(),
+            }],
+            windows: vec![window("B", key, false), window("C", context(9, 9), true)],
+        },
+        config: config(),
+    });
+
+    assert!(matches!(result, Err(EngineError::MissingContext(9, 9))));
+    assert_eq!(state.placements(), before);
     state.validate_invariants().unwrap();
 }
 

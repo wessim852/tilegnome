@@ -185,10 +185,9 @@ impl EngineState {
             );
         }
 
-        self.config = config.sanitized();
-        self.contexts = contexts;
-        self.windows.clear();
-        self.focused = snapshot
+        let mut rebuilt = Self::new(config);
+        rebuilt.contexts = contexts;
+        rebuilt.focused = snapshot
             .windows
             .iter()
             .find(|window| window.focused)
@@ -197,11 +196,13 @@ impl EngineState {
         let mut windows = snapshot.windows;
         windows.sort_by(|a, b| a.id.cmp(&b.id));
         for window in windows {
-            self.add_snapshot(window)?;
+            rebuilt.add_snapshot(window)?;
         }
-        if let Some(focused) = self.focused.clone() {
-            self.focus_window(&focused)?;
+        if let Some(focused) = rebuilt.focused.clone() {
+            rebuilt.focus_window(&focused)?;
         }
+        rebuilt.debug_validate()?;
+        *self = rebuilt;
         info!(
             event = "FULL_SYNC",
             windows = self.windows.len(),

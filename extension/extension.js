@@ -33,6 +33,7 @@ export default class DwindleExtension extends Extension {
         this._trackedWindows = new Set();
         this._windowSources = new Map();
         this._placementSources = new Map();
+        this._readinessExhausted = new Set();
         this._fullSyncSource = 0;
         this._settings = this.getSettings();
 
@@ -57,6 +58,7 @@ export default class DwindleExtension extends Extension {
         for (const source of this._placementSources.values())
             GLib.source_remove(source);
         this._placementSources.clear();
+        this._readinessExhausted.clear();
         this._signals.clear();
         this._keybindings.destroy();
         this._client.destroy();
@@ -91,11 +93,18 @@ export default class DwindleExtension extends Extension {
         this._signals.connect(display, 'grab-op-end', (_display, window) => {
             this._scheduleContext(window);
         });
-        this._signals.connect(display, 'workareas-changed', () => this._scheduleFullSync());
+        this._signals.connect(display, 'workareas-changed', () => {
+            this._readinessExhausted.clear();
+            this._scheduleFullSync();
+        });
 
         const monitorManager = global.backend.get_monitor_manager();
-        this._signals.connect(monitorManager, 'monitors-changed', () => this._scheduleFullSync());
+        this._signals.connect(monitorManager, 'monitors-changed', () => {
+            this._readinessExhausted.clear();
+            this._scheduleFullSync();
+        });
         this._signals.connect(global.workspace_manager, 'notify::n-workspaces', () => {
+            this._readinessExhausted.clear();
             this._scheduleFullSync();
         });
         this._signals.connect(global.workspace_manager, 'active-workspace-changed', () => {
@@ -109,6 +118,7 @@ export default class DwindleExtension extends Extension {
         }
         for (const key of ['enabled', 'ignored-apps']) {
             this._signals.connect(this._settings, `changed::${key}`, () => {
+                this._readinessExhausted.clear();
                 this._scheduleFullSync();
             });
         }
@@ -131,6 +141,7 @@ export default class DwindleExtension extends Extension {
     _onUnmanaged(window) {
         this._cancelWindowSource(window);
         this._cancelPlacement(window);
+        this._readinessExhausted.delete(window);
         this._borders.remove(window);
         this._trackedWindows.delete(window);
         this._signals.disconnectObject(window);
@@ -146,7 +157,7 @@ export default class DwindleExtension extends Extension {
         const eligible = this._settings.get_boolean('enabled')
             && shouldTile(window, ignoredApps(this._settings));
         if (eligible && !windowContextReady(window)) {
-            // ponytail: five seconds covers slow Wayland clients; resync handles later events.
+            // ponytail: five seconds covers slow Wayland clients; a Mutter signal retries later.
             if (attempt < WINDOW_READY_RETRIES) {
                 this._scheduleWindow(
                     window,
@@ -154,11 +165,12 @@ export default class DwindleExtension extends Extension {
                     WINDOW_READY_RETRY_MS
                 );
             } else {
-                console.warn('[DwindleRS] window context did not become ready; resyncing');
-                this._scheduleFullSync();
+                this._readinessExhausted.add(window);
+                console.warn('[DwindleRS] window context did not become ready; waiting for Mutter');
             }
             return;
         }
+        this._readinessExhausted.delete(window);
         const registered = this._registry.has(window);
         if (eligible && !registered) {
             this._registry.add(window);
@@ -177,6 +189,7 @@ export default class DwindleExtension extends Extension {
     }
 
     _scheduleEligibility(window) {
+        this._readinessExhausted.delete(window);
         this._scheduleWindow(window, () => this._syncEligibility(window));
     }
 
@@ -256,8 +269,8 @@ export default class DwindleExtension extends Extension {
         if (enabled) {
             for (const window of current) {
                 if (!windowContextReady(window)) {
-                    if (shouldTile(window, ignored))
-                        this._scheduleEligibility(window);
+                    if (shouldTile(window, ignored) && !this._readinessExhausted.has(window))
+                        this._scheduleWindow(window, () => this._syncEligibility(window));
                 } else if (shouldTile(window, ignored)) {
                     this._registry.add(window);
                     windows.push(snapshotWindow(window));
@@ -347,7 +360,7 @@ export default class DwindleExtension extends Extension {
                 if (this._destroyed || generation !== this._generation)
                     return;
                 this._daemonWarned = false;
-                this._handleResponse(JSON.parse(json));
+                this._handleResponse(JSON.parse(json), command);
             } catch (error) {
                 if (this._destroyed || generation !== this._generation)
                     return;
@@ -359,7 +372,7 @@ export default class DwindleExtension extends Extension {
         });
     }
 
-    _handleResponse(response) {
+    _handleResponse(response, command = null) {
         if (!response || typeof response !== 'object' || typeof response.type !== 'string')
             throw new Error('malformed daemon response');
         switch (response.type) {
@@ -377,6 +390,8 @@ export default class DwindleExtension extends Extension {
             break;
         case 'error':
             console.warn(`[DwindleRS] engine error: ${String(response.message)}`);
+            if (command?.command !== 'full_sync')
+                this._scheduleFullSync();
             break;
         default:
             throw new Error(`unknown daemon response: ${response.type}`);

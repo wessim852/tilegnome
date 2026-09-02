@@ -92,7 +92,13 @@ export function shouldTile(window, ignored) {
 
 export function windowContextReady(window) {
     try {
-        return window.get_monitor() >= 0 && workspaceFor(window) !== null;
+        const monitor = window.get_monitor();
+        const workspace = workspaceFor(window);
+        const workspaceIndex = workspace?.index() ?? -1;
+        return monitor >= 0
+            && monitor < global.display.get_n_monitors()
+            && workspaceIndex >= 0
+            && workspaceIndex < global.workspace_manager.n_workspaces;
     } catch {
         return false;
     }

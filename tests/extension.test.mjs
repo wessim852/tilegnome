@@ -28,7 +28,10 @@ const sandbox = {
     GLib,
     console,
     global: {},
+    ignoredApps: () => new Set(),
     readConfig: settings => settings.config,
+    shouldTile: () => true,
+    windowContextReady: () => false,
 };
 vm.runInNewContext(source, sandbox);
 const ExtensionClass = sandbox.DwindleExtension;
@@ -38,6 +41,7 @@ const ExtensionClass = sandbox.DwindleExtension;
     const window = {};
     let scheduled;
     let syncs = 0;
+    extension._readinessExhausted = new Set();
     extension._scheduleWindow = (candidate, callback) => {
         assert.equal(candidate, window);
         scheduled = callback;
@@ -84,6 +88,7 @@ const ExtensionClass = sandbox.DwindleExtension;
     sandbox.global.backend = {get_monitor_manager: () => monitorManager};
     const extension = Object.assign(Object.create(ExtensionClass.prototype), {
         _settings: settings,
+        _readinessExhausted: new Set(),
         _signals: {
             connect(object, signal, callback) {
                 if (object === settings)
@@ -184,4 +189,63 @@ const ExtensionClass = sandbox.DwindleExtension;
     callbacks.shift()();
     assert.equal(moves, 1);
     assert.equal(extension._placementSources.size, 0);
+}
+
+{
+    let reconciliations = 0;
+    const extension = Object.assign(Object.create(ExtensionClass.prototype), {
+        _scheduleFullSync() {
+            reconciliations++;
+        },
+    });
+    extension._handleResponse({type: 'error', message: 'rejected'}, {command: 'add_window'});
+    assert.equal(reconciliations, 1);
+    extension._handleResponse({type: 'error', message: 'rejected'}, {command: 'full_sync'});
+    assert.equal(reconciliations, 1);
+}
+
+{
+    const window = {};
+    let schedules = 0;
+    const extension = Object.assign(Object.create(ExtensionClass.prototype), {
+        _destroyed: false,
+        _settings: {get_boolean: () => true},
+        _readinessExhausted: new Set(),
+        _scheduleWindow() {
+            schedules++;
+        },
+    });
+    extension._syncEligibility(window, 50);
+    assert.equal(extension._readinessExhausted.has(window), true);
+    assert.equal(schedules, 0);
+    extension._scheduleEligibility(window);
+    assert.equal(extension._readinessExhausted.has(window), false);
+    assert.equal(schedules, 1);
+}
+
+{
+    let windowsSource = readFileSync(new URL('../extension/windows.js', import.meta.url), 'utf8');
+    windowsSource = windowsSource
+        .replace(/^import .*;\n/gm, '')
+        .replaceAll('export ', '');
+    windowsSource += '\nglobalThis.windowContextReady = windowContextReady;';
+    const windowsSandbox = {
+        Meta: {},
+        global: {
+            display: {get_n_monitors: () => 2},
+            workspace_manager: {
+                n_workspaces: 3,
+                get_active_workspace: () => ({index: () => 1}),
+            },
+        },
+    };
+    vm.runInNewContext(windowsSource, windowsSandbox);
+    const window = {
+        get_monitor: () => 1,
+        get_workspace: () => ({index: () => 2}),
+        is_on_all_workspaces: () => false,
+    };
+    assert.equal(windowsSandbox.windowContextReady(window), true);
+    window.get_monitor = () => 2;
+    assert.equal(windowsSandbox.windowContextReady(window), false);
 }
