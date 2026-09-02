@@ -23,10 +23,12 @@ source = source
     .replace('export default class DwindleExtension', 'class DwindleExtension');
 source += '\nglobalThis.DwindleExtension = DwindleExtension;';
 const sandbox = {
+    CONFIG_KEYS: ['inner-gap', 'outer-gap', 'split-ratio', 'resize-step', 'smart-split'],
     Extension: class {},
     GLib,
     console,
     global: {},
+    readConfig: settings => settings.config,
 };
 vm.runInNewContext(source, sandbox);
 const ExtensionClass = sandbox.DwindleExtension;
@@ -47,6 +49,61 @@ const ExtensionClass = sandbox.DwindleExtension;
     extension._scheduleContext(window);
     scheduled();
     assert.equal(syncs, 1);
+}
+
+{
+    const sticky = {is_on_all_workspaces: () => true};
+    const ordinary = {is_on_all_workspaces: () => false};
+    const scheduled = [];
+    let focusChanges = 0;
+    const extension = Object.assign(Object.create(ExtensionClass.prototype), {
+        _registry: {values: () => [sticky, ordinary]},
+        _onFocusChanged() {
+            focusChanges++;
+        },
+        _scheduleContext(window) {
+            scheduled.push(window);
+        },
+    });
+    extension._onActiveWorkspaceChanged();
+    assert.equal(focusChanges, 1);
+    assert.deepEqual(scheduled, [sticky]);
+}
+
+{
+    const display = {};
+    const monitorManager = {};
+    const workspaceManager = {};
+    const config = {};
+    const settings = {config};
+    const handlers = new Map();
+    let fullSyncs = 0;
+    let sent;
+    sandbox.global.display = display;
+    sandbox.global.workspace_manager = workspaceManager;
+    sandbox.global.backend = {get_monitor_manager: () => monitorManager};
+    const extension = Object.assign(Object.create(ExtensionClass.prototype), {
+        _settings: settings,
+        _signals: {
+            connect(object, signal, callback) {
+                if (object === settings)
+                    handlers.set(signal, callback);
+            },
+        },
+        _send(command) {
+            sent = command;
+        },
+        _scheduleFullSync() {
+            fullSyncs++;
+        },
+    });
+    extension._connectSignals();
+    handlers.get('changed::inner-gap')();
+    assert.equal(sent.command, 'configure');
+    assert.equal(sent.config, config);
+    assert.equal(fullSyncs, 0);
+    handlers.get('changed::enabled')();
+    assert.equal(fullSyncs, 1);
 }
 
 {

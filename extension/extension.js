@@ -99,11 +99,15 @@ export default class DwindleExtension extends Extension {
             this._scheduleFullSync();
         });
         this._signals.connect(global.workspace_manager, 'active-workspace-changed', () => {
-            this._onFocusChanged();
-            this._scheduleFullSync();
+            this._onActiveWorkspaceChanged();
         });
 
-        for (const key of [...CONFIG_KEYS, 'enabled', 'ignored-apps']) {
+        for (const key of CONFIG_KEYS) {
+            this._signals.connect(this._settings, `changed::${key}`, () => {
+                this._send({command: 'configure', config: readConfig(this._settings)});
+            });
+        }
+        for (const key of ['enabled', 'ignored-apps']) {
             this._signals.connect(this._settings, `changed::${key}`, () => {
                 this._scheduleFullSync();
             });
@@ -296,6 +300,14 @@ export default class DwindleExtension extends Extension {
                 command: 'focus_window',
                 window_id: windowId(window),
             });
+        }
+    }
+
+    _onActiveWorkspaceChanged() {
+        this._onFocusChanged();
+        for (const window of this._registry.values()) {
+            if (window.is_on_all_workspaces())
+                this._scheduleContext(window);
         }
     }
 

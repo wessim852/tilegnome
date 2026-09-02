@@ -185,6 +185,51 @@ fn arbitrary_negative_monitor_coordinates_stay_inside_work_area() {
 }
 
 #[test]
+fn one_pixel_splits_overlap_instead_of_emitting_invalid_rectangles() {
+    let tiny = Rect {
+        x: 4,
+        y: 7,
+        width: 1,
+        height: 1,
+    };
+    assert_eq!(tiny.split_horizontal(0.5, 10), (tiny, tiny));
+    assert_eq!(tiny.split_vertical(0.5, 10), (tiny, tiny));
+
+    let key = context(0, 0);
+    let mut state = synced_state(&[(key, tiny)]);
+    add(&mut state, "A", key, false, tiny);
+    add(&mut state, "B", key, false, tiny);
+    assert!(
+        state
+            .placements()
+            .iter()
+            .all(|placement| placement.rect == tiny)
+    );
+}
+
+#[test]
+fn focused_add_window_becomes_the_next_insertion_target() {
+    let key = context(0, 0);
+    let mut state = synced_state(&[(key, area())]);
+    add(&mut state, "A", key, true, area());
+    state
+        .apply(Command::AddWindow {
+            window: window("B", key, true),
+            work_area: area(),
+        })
+        .unwrap();
+    state
+        .apply(Command::AddWindow {
+            window: window("C", key, false),
+            work_area: area(),
+        })
+        .unwrap();
+
+    assert_eq!(rect_for(&state, "A").height, 1060);
+    assert_eq!(rect_for(&state, "B").height, 525);
+}
+
+#[test]
 fn monitors_and_workspaces_are_independent() {
     let c00 = context(0, 0);
     let c01 = context(0, 1);

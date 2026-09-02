@@ -88,7 +88,7 @@ gsettings set dev.dwindlers ignored-apps "['org.gnome.Calculator', 'steam']"
 gsettings set dev.dwindlers enabled false
 ```
 
-Geometry, filtering, and enabled-setting changes trigger a complete reconciliation and relayout.
+Geometry changes relayout existing trees; filtering and enabled-setting changes trigger a complete reconciliation.
 
 ## Logs
 

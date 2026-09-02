@@ -257,8 +257,13 @@ impl EngineState {
                 work_area,
                 tree: LayoutTree::new(),
             });
-        self.add_snapshot(window.clone())?;
-        debug!(event = "WINDOW_ADD", window_id = %window.id.0);
+        let focused = window.focused;
+        let window_id = window.id.clone();
+        self.add_snapshot(window)?;
+        if focused {
+            self.focus_window(&window_id)?;
+        }
+        debug!(event = "WINDOW_ADD", window_id = %window_id.0);
         Ok(())
     }
 

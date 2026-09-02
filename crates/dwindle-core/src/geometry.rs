@@ -59,14 +59,7 @@ impl Rect {
 
     pub(crate) fn split_horizontal(self, ratio: f64, requested_gap: i32) -> (Self, Self) {
         if self.width <= 1 {
-            return (
-                self,
-                Self {
-                    x: self.x.saturating_add(self.width.max(0)),
-                    width: 0,
-                    ..self
-                },
-            );
+            return (self, self);
         }
         let gap = requested_gap
             .max(0)
@@ -92,14 +85,7 @@ impl Rect {
 
     pub(crate) fn split_vertical(self, ratio: f64, requested_gap: i32) -> (Self, Self) {
         if self.height <= 1 {
-            return (
-                self,
-                Self {
-                    y: self.y.saturating_add(self.height.max(0)),
-                    height: 0,
-                    ..self
-                },
-            );
+            return (self, self);
         }
         let gap = requested_gap
             .max(0)
