@@ -217,3 +217,9 @@ gnome-extensions disable tilegnome@wessim852.github.com
 ```
 
 The uninstall script removes only the per-user extension directory. It does not change system configuration.
+
+## License
+
+TileGNOME is available under the [MIT License](LICENSE).
+
+Copyright © 2026 Wassim Gueddes.
