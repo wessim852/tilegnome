@@ -131,7 +131,29 @@ impl LayoutTree {
             .get(&target)
             .copied()
             .ok_or_else(|| TreeError::Corrupt("target leaf has no rectangle".into()))?;
-        let preferred = if config.smart_split && target_rect.height > target_rect.width {
+        let target_leaf = self.windows[&target];
+        let preferred = if !config.smart_split {
+            Orientation::Horizontal
+        } else if let Some(parent) = self.nodes[target_leaf].parent {
+            match self.nodes[parent].kind {
+                NodeKind::Split {
+                    orientation, first, ..
+                } if first == target_leaf => orientation,
+                NodeKind::Split {
+                    orientation,
+                    second,
+                    ..
+                } if second == target_leaf => match orientation {
+                    Orientation::Horizontal => Orientation::Vertical,
+                    Orientation::Vertical => Orientation::Horizontal,
+                },
+                _ => {
+                    return Err(TreeError::Corrupt(
+                        "leaf parent does not reference leaf".into(),
+                    ));
+                }
+            }
+        } else if target_rect.height > target_rect.width {
             Orientation::Vertical
         } else {
             Orientation::Horizontal

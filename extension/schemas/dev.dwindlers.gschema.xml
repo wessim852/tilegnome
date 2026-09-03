@@ -27,7 +27,7 @@
     </key>
     <key name="smart-split" type="b">
       <default>true</default>
-      <summary>Choose split orientation from target geometry</summary>
+      <summary>Choose split orientation from the current dwindle branch</summary>
     </key>
     <key name="ignored-apps" type="as">
       <default>[]</default>

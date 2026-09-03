@@ -222,7 +222,7 @@ fn refocusing_left_leaf_splits_left_branch_not_last_inserted_branch() {
         Some(split(
             Orientation::Horizontal,
             0.5,
-            split(Orientation::Vertical, 0.5, leaf("Firefox"), leaf("New"),),
+            split(Orientation::Horizontal, 0.5, leaf("Firefox"), leaf("New"),),
             split(Orientation::Vertical, 0.5, leaf("Terminal"), leaf("Zed"),),
         ))
     );
@@ -856,7 +856,7 @@ fn floating_reinserts_at_current_focus_not_deleted_slot() {
         Some(split(
             Orientation::Horizontal,
             0.5,
-            split(Orientation::Vertical, 0.5, leaf("A"), leaf("B")),
+            split(Orientation::Horizontal, 0.5, leaf("A"), leaf("B")),
             leaf("C"),
         ))
     );
