@@ -206,6 +206,30 @@ fn basic_dwindle_insertion_uses_focused_leaf() {
 }
 
 #[test]
+fn refocusing_left_leaf_splits_left_branch_not_last_inserted_branch() {
+    let key = context(0, 0);
+    let mut state = synced_state(&[(key, area())]);
+    add(&mut state, "Firefox", key, true, area());
+    add(&mut state, "Terminal", key, false, area());
+    focus(&mut state, "Terminal");
+    add(&mut state, "Zed", key, false, area());
+
+    focus(&mut state, "Firefox");
+    add(&mut state, "New", key, false, area());
+
+    assert_eq!(
+        state_shape(&state, key),
+        Some(split(
+            Orientation::Horizontal,
+            0.5,
+            split(Orientation::Vertical, 0.5, leaf("Firefox"), leaf("New"),),
+            split(Orientation::Vertical, 0.5, leaf("Terminal"), leaf("Zed"),),
+        ))
+    );
+    state.validate_invariants().unwrap();
+}
+
+#[test]
 fn client_minimum_size_does_not_bypass_the_focused_leaf() {
     let key = context(0, 0);
     let mut state = synced_state(&[(key, area())]);

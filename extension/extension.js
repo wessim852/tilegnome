@@ -132,6 +132,7 @@ export default class DwindleExtension extends Extension {
             return;
         this._trackedWindows.add(window);
         this._signals.connect(window, 'unmanaged', () => this._onUnmanaged(window));
+        this._signals.connect(window, 'destroy', () => this._onUnmanaged(window));
         this._signals.connect(window, 'workspace-changed', () => this._scheduleContext(window));
         this._signals.connect(window, 'notify::fullscreen', () => {
             if (window.is_fullscreen())
@@ -327,11 +328,7 @@ export default class DwindleExtension extends Extension {
     }
 
     _onFocusChanged() {
-        const liveWindows = new Set(global.display.list_all_windows());
-        for (const window of [...this._registry.values()]) {
-            if (!liveWindows.has(window))
-                this._onUnmanaged(window);
-        }
+        this._pruneClosedWindows();
         const window = global.display.get_focus_window();
         this._syncBorders();
         if (window && this._registry.has(window)) {
@@ -339,6 +336,14 @@ export default class DwindleExtension extends Extension {
                 command: 'focus_window',
                 window_id: windowId(window),
             });
+        }
+    }
+
+    _pruneClosedWindows() {
+        const liveWindows = new Set(global.display.list_all_windows());
+        for (const window of [...this._registry.values()]) {
+            if (!liveWindows.has(window))
+                this._onUnmanaged(window);
         }
     }
 
@@ -353,6 +358,7 @@ export default class DwindleExtension extends Extension {
     _onKeybinding(action, direction) {
         if (!this._settings.get_boolean('enabled'))
             return;
+        this._pruneClosedWindows();
         const window = global.display.get_focus_window();
         if (!window)
             return;

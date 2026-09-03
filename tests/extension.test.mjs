@@ -66,6 +66,31 @@ const ExtensionClass = sandbox.DwindleExtension;
 }
 
 {
+    const window = {};
+    const handlers = new Map();
+    const extension = Object.assign(Object.create(ExtensionClass.prototype), {
+        _trackedWindows: new Set(),
+        _signals: {
+            connect(_object, signal, callback) {
+                handlers.set(signal, callback);
+            },
+        },
+        _scheduleContext() {},
+        _scheduleEligibility() {},
+        _borders: {remove() {}},
+    });
+    let removed;
+    extension._trackWindow(window);
+    extension._onUnmanaged = candidate => {
+        removed = candidate;
+    };
+    assert.equal(handlers.has('unmanaged'), true);
+    assert.equal(handlers.has('destroy'), true);
+    handlers.get('destroy')();
+    assert.equal(removed, window);
+}
+
+{
     const extension = Object.create(ExtensionClass.prototype);
     const window = {};
     let scheduled;
@@ -308,6 +333,7 @@ const ExtensionClass = sandbox.DwindleExtension;
     const extension = Object.assign(Object.create(ExtensionClass.prototype), {
         _settings: {get_boolean: () => true},
         _registry: {has: candidate => candidate === window},
+        _pruneClosedWindows() {},
         _send(command) {
             sent = command;
         },
@@ -315,6 +341,49 @@ const ExtensionClass = sandbox.DwindleExtension;
     sandbox.windowId = () => '42';
     extension._onKeybinding('toggle_maximize');
     assert.deepEqual({...sent}, {command: 'toggle_maximize', window_id: '42'});
+}
+
+{
+    const closed = {};
+    const focused = {};
+    const windows = new Map([['7', closed], ['8', focused]]);
+    const ids = new Map([[closed, '7'], [focused, '8']]);
+    const commands = [];
+    sandbox.global.display = {
+        list_all_windows: () => [focused],
+        get_focus_window: () => focused,
+    };
+    sandbox.windowId = window => ids.get(window);
+    const extension = Object.assign(Object.create(ExtensionClass.prototype), {
+        _settings: {get_boolean: () => true},
+        _registry: {
+            values: () => windows.values(),
+            has: window => ids.has(window),
+            remove(window) {
+                const id = ids.get(window);
+                if (id === undefined)
+                    return null;
+                ids.delete(window);
+                windows.delete(id);
+                return id;
+            },
+        },
+        _stalePlacements: new Set(),
+        _readinessExhausted: new Set(),
+        _trackedWindows: new Set([closed, focused]),
+        _cancelWindowSource() {},
+        _cancelPlacement() {},
+        _borders: {remove() {}},
+        _signals: {disconnectObject() {}},
+        _send(command) {
+            commands.push({...command});
+        },
+    });
+    extension._onKeybinding('toggle_maximize');
+    assert.deepEqual(commands, [
+        {command: 'remove_window', window_id: '7'},
+        {command: 'toggle_maximize', window_id: '8'},
+    ]);
 }
 
 {
