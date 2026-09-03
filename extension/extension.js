@@ -132,7 +132,6 @@ export default class DwindleExtension extends Extension {
             return;
         this._trackedWindows.add(window);
         this._signals.connect(window, 'unmanaged', () => this._onUnmanaged(window));
-        this._signals.connect(window, 'destroy', () => this._onUnmanaged(window));
         this._signals.connect(window, 'workspace-changed', () => this._scheduleContext(window));
         this._signals.connect(window, 'notify::fullscreen', () => {
             if (window.is_fullscreen())

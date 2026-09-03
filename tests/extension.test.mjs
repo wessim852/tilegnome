@@ -68,10 +68,22 @@ const ExtensionClass = sandbox.DwindleExtension;
 {
     const window = {};
     const handlers = new Map();
+    const supportedSignals = new Set([
+        'unmanaged',
+        'workspace-changed',
+        'notify::fullscreen',
+        'notify::skip-taskbar',
+        'notify::window-type',
+        'notify::mapped',
+        'notify::resizeable',
+        'notify::maximized-horizontally',
+        'notify::maximized-vertically',
+    ]);
     const extension = Object.assign(Object.create(ExtensionClass.prototype), {
         _trackedWindows: new Set(),
         _signals: {
             connect(_object, signal, callback) {
+                assert.equal(supportedSignals.has(signal), true);
                 handlers.set(signal, callback);
             },
         },
@@ -85,8 +97,7 @@ const ExtensionClass = sandbox.DwindleExtension;
         removed = candidate;
     };
     assert.equal(handlers.has('unmanaged'), true);
-    assert.equal(handlers.has('destroy'), true);
-    handlers.get('destroy')();
+    handlers.get('unmanaged')();
     assert.equal(removed, window);
 }
 
