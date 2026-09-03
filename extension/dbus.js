@@ -28,7 +28,7 @@ export class EngineClient {
                 if (this._destroyed)
                     return;
                 if (error) {
-                    console.warn(`[DwindleRS] D-Bus proxy unavailable: ${error.message}`);
+                    console.warn(`[TileGNOME] D-Bus proxy unavailable: ${error.message}`);
                     return;
                 }
                 this._ownerSignal = proxy.connect(
@@ -69,10 +69,10 @@ export class EngineClient {
     _ownerChanged() {
         const hasOwner = this.available;
         if (hasOwner && !this._hadOwner) {
-            console.log('[DwindleRS] Rust daemon connected');
+            console.log('[TileGNOME] Rust daemon connected');
             this._onAvailable?.();
         } else if (!hasOwner && this._hadOwner) {
-            console.warn('[DwindleRS] Rust daemon disconnected; tiling paused');
+            console.warn('[TileGNOME] Rust daemon disconnected; tiling paused');
         }
         this._hadOwner = hasOwner;
     }

@@ -1,147 +1,219 @@
-# DwindleRS for GNOME 50
+# TileGNOME
 
-A personal GNOME Shell 50 tiling extension whose layout engine runs in Rust. GNOME Shell only observes Mutter state, sends typed JSON over the user session D-Bus, applies validated rectangles, and owns keybindings.
+TileGNOME is a binary-tree tiling window manager for GNOME Shell 50 on Wayland. It provides a Hyprland-inspired dwindle layout while remaining native to GNOME and Mutter.
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the responsibility boundary.
+The project keeps window-management integration small and explicit:
 
-## Build and test
+- A GNOME Shell extension observes windows, workspaces, monitors, focus, and work areas.
+- A Rust daemon owns the tiling tree and all layout decisions.
+- The two components communicate over the user D-Bus session.
+- Mutter applies placements directly, without `wmctrl`, `xdotool`, or other X11 tools.
 
-This repository pins nixpkgs in `flake.lock`. This NixOS host has flakes disabled globally, so enter the shell without changing global configuration:
+Each workspace and monitor has an independent layout tree. Window insertion splits the focused leaf, removal immediately collapses its parent, and geometry is always derived from the current tree. See [ARCHITECTURE.md](ARCHITECTURE.md) for the component boundaries.
+
+## Features
+
+- Dwindle/BSP insertion around the focused tiled window
+- Independent layouts for every workspace and monitor
+- Directional focus, swapping, and split-ratio resizing
+- Per-window floating mode
+- Per-context layout maximize that preserves the underlying tree
+- Configurable gaps, split ratio, resize step, and ignored applications
+- Focus borders with active-window highlighting
+- D-Bus reconnection and full-state recovery after daemon restarts
+- Native GNOME Wayland window placement through Mutter
+
+## Requirements
+
+- GNOME Shell 50
+- Wayland session
+- Rust and Cargo
+- GJS and GNOME Shell development tools
+- GLib utilities, including `glib-compile-schemas`
+- D-Bus session utilities
+
+This repository currently targets GNOME Shell 50 only. Check your session before installing:
 
 ```sh
-nix --extra-experimental-features 'nix-command flakes' develop
-cargo test
-cargo build
-cargo fmt --check
-cargo clippy --workspace --all-targets -- -D warnings
+gnome-shell --version
+echo "$XDG_SESSION_TYPE"
 ```
 
-If flakes are already enabled in your Nix configuration, plain `nix develop` is enough.
+## Install on NixOS
 
-## Install and run in the real GNOME Wayland session
-
-Inside `nix develop`:
+Clone the repository and build/install from the included development shell. This does not modify your NixOS or Home Manager configuration.
 
 ```sh
-cargo build
+git clone https://github.com/wessim852/tilegnome.git
+cd tilegnome
+nix --extra-experimental-features 'nix-command flakes' develop path:. -c bash -c 'cargo build --workspace && ./scripts/install-extension.sh'
+```
+
+If flakes are enabled globally, the shorter form is:
+
+```sh
+nix develop path:. -c bash -c 'cargo build --workspace && ./scripts/install-extension.sh'
+```
+
+On the first installation, log out and back in so GNOME Shell discovers the extension. Wayland does not support reloading Shell with `Alt+F2`, `r`.
+
+Start the Rust daemon and leave this terminal open:
+
+```sh
+cd tilegnome
+nix --extra-experimental-features 'nix-command flakes' develop path:. -c ./scripts/run-daemon.sh
+```
+
+Enable the extension in another terminal:
+
+```sh
+gnome-extensions enable tilegnome@wessim852.github.com
+gnome-extensions info tilegnome@wessim852.github.com
+```
+
+## Install on other Linux distributions
+
+Install the build and GNOME runtime dependencies using your distribution's package manager.
+
+Fedora:
+
+```sh
+sudo dnf install git rust cargo gcc pkgconf-pkg-config gjs gnome-shell glib2-devel dbus-daemon
+```
+
+Arch Linux:
+
+```sh
+sudo pacman -S --needed git rust gcc pkgconf gjs gnome-shell glib2 dbus
+```
+
+Ubuntu/Debian:
+
+```sh
+sudo apt install git rustc cargo build-essential pkg-config gjs gnome-shell libglib2.0-dev dbus
+```
+
+Your distribution must still provide GNOME Shell 50. Then build and install:
+
+```sh
+git clone https://github.com/wessim852/tilegnome.git
+cd tilegnome
+cargo build --workspace
 ./scripts/install-extension.sh
 ```
 
-GNOME Shell 50 enumerates manually installed extensions when the Shell session starts. On the first install, log out and back in once; restarting Shell with `Alt+F2`, `r` is not supported on Wayland. GJS source updates in the real Wayland session also require logging out and back in; use the nested devkit workflow below for a faster edit/test loop. Rust-only updates need only a daemon restart.
-
-Start the daemon in a terminal and leave it running:
+Log out and back in after the first installation. Start the daemon:
 
 ```sh
-RUST_LOG=dwindle_daemon=info,dwindle_core=debug ./scripts/run-daemon.sh
+cd tilegnome
+RUST_LOG=dwindle_daemon=info,dwindle_core=info ./scripts/run-daemon.sh
 ```
 
-In another terminal:
+In another terminal, enable TileGNOME:
 
 ```sh
-gnome-extensions enable dwindle-rs@dwindlers.dev
-gnome-extensions info dwindle-rs@dwindlers.dev
+gnome-extensions enable tilegnome@wessim852.github.com
 ```
 
-Disable or remove it safely:
+## Keyboard shortcuts
 
-```sh
-gnome-extensions disable dwindle-rs@dwindlers.dev
-./scripts/uninstall-extension.sh
-```
-
-Re-run `install-extension.sh` after editing GJS or schemas; it disables the old copy before replacement. No NixOS, Home Manager, or systemd configuration is modified.
-
-## Shortcuts
-
-| Action | Default |
-|---|---|
-| Focus left/down/up/right | `Super+Alt+H`, `Super+J`, `Super+K`, `Super+Alt+L` |
-| Swap left/down/up/right | `Super+Shift+H/J/K/L` |
-| Resize left/down/up/right | `Super+Ctrl+H/J/K/L` |
+| Action | Shortcut |
+| --- | --- |
+| Focus left | `Super+Alt+H` |
+| Focus down | `Super+J` |
+| Focus up | `Super+K` |
+| Focus right | `Super+Alt+L` |
+| Swap window left/down/up/right | `Super+Shift+H/J/K/L` |
+| Resize split left/down/up/right | `Super+Ctrl+H/J/K/L` |
 | Toggle floating | `Super+Alt+Space` |
 | Toggle layout maximize | `Super+F` |
 
-The installed GNOME 50 configuration reserves `Super+H` for minimize, `Super+L` for locking the session, and `Super+Shift+Space` for reverse input-source switching. Those defaults are avoided. To reclaim two of them intentionally, clear GNOME's bindings and change this extension's settings:
+`Super+H`, `Super+L`, and `Super+Shift+Space` are intentionally avoided because GNOME commonly reserves them for minimize, screen lock, and input-source switching.
+
+## Configuration
+
+TileGNOME uses the stable `dev.dwindlers` GSettings schema. Point `gsettings` at the extension's locally compiled schema before changing values:
 
 ```sh
-gsettings set org.gnome.desktop.wm.keybindings minimize '@as []'
-gsettings set org.gnome.desktop.wm.keybindings switch-input-source-backward '@as []'
-export GSETTINGS_SCHEMA_DIR="$HOME/.local/share/gnome-shell/extensions/dwindle-rs@dwindlers.dev/schemas"
-gsettings set dev.dwindlers dwindle-focus-left "['<Super>h']"
-gsettings set dev.dwindlers dwindle-toggle-floating "['<Shift><Super>space']"
-```
-
-## Settings
-
-The schema defaults are enabled, 8-pixel inner/outer gaps, 0.5 new-split ratio, 0.05 resize step, and smart splitting. For example:
-
-```sh
-export GSETTINGS_SCHEMA_DIR="$HOME/.local/share/gnome-shell/extensions/dwindle-rs@dwindlers.dev/schemas"
+export GSETTINGS_SCHEMA_DIR="$HOME/.local/share/gnome-shell/extensions/tilegnome@wessim852.github.com/schemas"
 gsettings set dev.dwindlers inner-gap 12
 gsettings set dev.dwindlers outer-gap 12
 gsettings set dev.dwindlers split-ratio 0.55
 gsettings set dev.dwindlers resize-step 0.05
 gsettings set dev.dwindlers smart-split true
 gsettings set dev.dwindlers ignored-apps "['org.gnome.Calculator', 'steam']"
-gsettings set dev.dwindlers enabled false
 ```
 
-Geometry changes relayout existing trees; filtering and enabled-setting changes trigger a complete reconciliation.
+Available settings:
 
-## Logs
+| Setting | Default | Purpose |
+| --- | --- | --- |
+| `enabled` | `true` | Enables automatic tiling |
+| `inner-gap` | `8` | Space between tiled windows |
+| `outer-gap` | `8` | Space around each monitor work area |
+| `split-ratio` | `0.5` | Ratio assigned to newly created splits |
+| `resize-step` | `0.05` | Keyboard resize increment |
+| `smart-split` | `true` | Selects the split axis from the current tree branch |
+| `ignored-apps` | `[]` | Application IDs excluded from tiling |
 
-Rust logs stay in the terminal running `run-daemon.sh`. Increase detail with `RUST_LOG=dwindle_core=debug,dwindle_daemon=debug`.
+Geometry settings relayout existing trees without rebuilding them. The default split ratio only affects future insertions.
 
-Follow GNOME Shell adapter logs in another terminal:
+## Updating
 
 ```sh
-journalctl --user -f -o cat | rg '\[DwindleRS\]'
+cd tilegnome
+git pull --ff-only
+cargo build --workspace
+./scripts/install-extension.sh
 ```
 
-The daemon can be inspected directly on the session bus:
+Restart the daemon after Rust changes. Log out and back in after extension or schema changes so GNOME Shell does not reuse cached modules.
+
+## Logs and diagnostics
+
+Rust logs are written to the daemon terminal. Enable detailed output with:
+
+```sh
+RUST_LOG=dwindle_daemon=debug,dwindle_core=debug ./scripts/run-daemon.sh
+```
+
+Follow GNOME Shell adapter logs with:
+
+```sh
+journalctl --user -f -o cat | rg '\[TileGNOME\]'
+```
+
+Inspect the daemon on the user session bus:
 
 ```sh
 busctl --user introspect dev.dwindlers.Engine /dev/dwindlers/Engine
 ```
 
-If the daemon exits, the extension pauses without moving windows. Restarting it causes the persistent proxy to notice the new bus owner and send a FullSync.
+If the daemon is unavailable, the extension pauses placement safely. Restarting the daemon reconnects the adapter and reconciles the current window state.
 
-## Nested GNOME 50 test
+## Development
 
-The installed `gnome-shell --help` advertises `--devkit` and `--wayland`. Install the extension first, then run this inside `nix develop`:
+Run the complete Rust validation suite:
 
 ```sh
-./scripts/install-extension.sh
+nix --extra-experimental-features 'nix-command flakes' develop path:. -c cargo fmt --all --check
+nix --extra-experimental-features 'nix-command flakes' develop path:. -c cargo clippy --workspace --all-targets -- -D warnings
+nix --extra-experimental-features 'nix-command flakes' develop path:. -c cargo test --workspace
+```
+
+For a nested GNOME Shell session, install the extension and run:
+
+```sh
 ./scripts/test-nested.sh
 ```
 
-The script starts both `dwindle-daemon` and `gnome-shell --devkit --wayland --no-x11` inside one `dbus-run-session`, then enables the extension on that nested session. The regular desktop's daemon is intentionally not visible there.
+The script starts the daemon and `gnome-shell --devkit --wayland --no-x11` inside the same isolated D-Bus session.
 
-## Manual multi-monitor acceptance test
+## Disable or uninstall
 
-1. Run `cargo test`, `cargo build`, and the install/start/enable commands above.
-2. Open Firefox on monitor 1. Confirm it fills that monitor's work area minus the outer gap.
-3. Open one terminal on monitor 1. Confirm only that context becomes a left/right split.
-4. Focus the terminal and open another terminal. Confirm its leaf splits top/bottom.
-5. Open Zed and another application on monitor 2. Confirm monitor 1 does not move.
-6. Close a monitor-1 window. Confirm its parent collapses and the sibling fills the freed branch.
-7. Drag a tiled window across monitors and release. Confirm both contexts retile.
-8. Move a tiled window to another workspace. Visit both workspaces and confirm each context is complete.
-9. Test focus with `Super+Alt+H` for left, `Super+J/K` for down/up, and `Super+Alt+L` for right.
-10. Test swaps with `Super+Shift+H/J/K/L` and ratio changes with `Super+Ctrl+H/J/K/L`.
-11. Press `Super+F` on one window. Confirm it fills that monitor's work area while the top bar remains visible; press it again and confirm the exact tiled tree and ratios are restored.
-12. While a window is layout-maximized, focus a tiled neighbor directionally. Confirm the normal layout returns and the neighbor receives focus.
-13. Toggle floating with `Super+Alt+Space`, move/resize the window, then toggle again and confirm it rejoins the focused context.
-14. Disable the extension, exercise GNOME normally, and confirm no shortcut remains active. Re-enable it and confirm current windows are tiled by FullSync.
-15. Stop and restart the Rust daemon while windows remain open. Confirm the extension logs reconnection and reconstructs every workspace/monitor context.
-16. Hotplug or reconfigure a monitor. Confirm a topology FullSync rebuilds all contexts without stale placements.
+```sh
+gnome-extensions disable tilegnome@wessim852.github.com
+./scripts/uninstall-extension.sh
+```
 
-## Known MVP limitations
-
-- FullSync and monitor topology changes rebuild trees deterministically; they do not preserve the exact previous split tree.
-- Floating state is in Rust and is intentionally not persisted. A daemon/extension restart tiles eligible floating windows again.
-- Tab grouping is temporarily disabled: the previous implementation put multiple windows in one leaf, which violates the BSP invariant. A future grouping layer must not alter the one-window-per-leaf tree.
-- Directional focus stays within one workspace/monitor context.
-- Mouse grabs only migrate context or restore the existing layout; there are no drop targets or insertion previews.
-- Mutter/client minimum-size constraints may prevent a client from matching a very small calculated rectangle exactly.
-- With `smart-split=false`, new splits are horizontal. There is no alternate layout, preferences UI, animation, gesture, or overview integration.
+The uninstall script removes only the per-user extension directory. It does not change system configuration.

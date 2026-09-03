@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-UUID='dwindle-rs@dwindlers.dev'
+UUID='tilegnome@wessim852.github.com'
+LEGACY_UUID='dwindle-rs@dwindlers.dev'
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname -- "$SCRIPT_DIR")"
 TARGET="$HOME/.local/share/gnome-shell/extensions/$UUID"
@@ -12,6 +13,8 @@ command -v glib-compile-schemas >/dev/null || {
 }
 
 gnome-extensions disable "$UUID" 2>/dev/null || true
+gnome-extensions disable "$LEGACY_UUID" 2>/dev/null || true
+rm -rf -- "$HOME/.local/share/gnome-shell/extensions/$LEGACY_UUID"
 rm -rf -- "$TARGET"
 install -d -- "$TARGET"
 cp -R -- "$PROJECT_ROOT/extension/." "$TARGET/"

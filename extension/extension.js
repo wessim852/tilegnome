@@ -45,7 +45,7 @@ export default class DwindleExtension extends Extension {
         );
         this._connectSignals();
         this._scheduleFullSync();
-        console.log('[DwindleRS] enabled');
+        console.log('[TileGNOME] enabled');
     }
 
     disable() {
@@ -74,7 +74,7 @@ export default class DwindleExtension extends Extension {
         this._borders = null;
         this._signals = null;
         this._settings = null;
-        console.log('[DwindleRS] disabled');
+        console.log('[TileGNOME] disabled');
     }
 
     _connectSignals() {
@@ -162,7 +162,7 @@ export default class DwindleExtension extends Extension {
         try {
             this._borders.remove(window);
         } catch (error) {
-            console.warn(`[DwindleRS] stale border cleanup skipped: ${error.message}`);
+            console.warn(`[TileGNOME] stale border cleanup skipped: ${error.message}`);
         }
         this._trackedWindows.delete(window);
         this._signals.disconnectObject(window);
@@ -187,7 +187,7 @@ export default class DwindleExtension extends Extension {
                 );
             } else {
                 this._readinessExhausted.add(window);
-                console.warn('[DwindleRS] normal window did not become tile-ready; waiting for Mutter');
+                console.warn('[TileGNOME] normal window did not become tile-ready; waiting for Mutter');
             }
             return;
         }
@@ -227,7 +227,7 @@ export default class DwindleExtension extends Extension {
                 work_area: workAreaFor(window),
             });
         } catch (error) {
-            console.warn(`[DwindleRS] window context unavailable: ${error.message}`);
+            console.warn(`[TileGNOME] window context unavailable: ${error.message}`);
         }
     }
 
@@ -239,7 +239,7 @@ export default class DwindleExtension extends Extension {
             try {
                 callback();
             } catch (error) {
-                console.warn(`[DwindleRS] window event skipped: ${error.message}`);
+                console.warn(`[TileGNOME] window event skipped: ${error.message}`);
             }
             return GLib.SOURCE_REMOVE;
         };
@@ -264,7 +264,7 @@ export default class DwindleExtension extends Extension {
             try {
                 this._fullSync();
             } catch (error) {
-                console.warn(`[DwindleRS] FullSync skipped: ${error.message}`);
+                console.warn(`[TileGNOME] FullSync skipped: ${error.message}`);
             }
             return GLib.SOURCE_REMOVE;
         });
@@ -387,7 +387,7 @@ export default class DwindleExtension extends Extension {
                 if (this._destroyed || generation !== this._generation)
                     return;
                 if (!this._daemonWarned) {
-                    console.warn(`[DwindleRS] request failed; tiling paused: ${error.message}`);
+                    console.warn(`[TileGNOME] request failed; tiling paused: ${error.message}`);
                     this._daemonWarned = true;
                 }
             }
@@ -411,7 +411,7 @@ export default class DwindleExtension extends Extension {
             this._focus(response.window_id);
             break;
         case 'error':
-            console.warn(`[DwindleRS] engine error: ${String(response.message)}`);
+            console.warn(`[TileGNOME] engine error: ${String(response.message)}`);
             break;
         default:
             throw new Error(`unknown daemon response: ${response.type}`);
@@ -430,7 +430,7 @@ export default class DwindleExtension extends Extension {
             try {
                 if (!this._safeRect(placement.rect, [workAreaFor(window)])) {
                     if (!this._stalePlacements.has(placement.window_id))
-                        console.warn('[DwindleRS] stale placement skipped');
+                        console.warn('[TileGNOME] stale placement skipped');
                     this._stalePlacements.add(placement.window_id);
                     continue;
                 }
@@ -438,7 +438,7 @@ export default class DwindleExtension extends Extension {
                 this._queuePlacement(window, placement.rect);
             } catch (error) {
                 if (!this._stalePlacements.has(placement.window_id))
-                    console.warn(`[DwindleRS] placement skipped: ${error.message}`);
+                    console.warn(`[TileGNOME] placement skipped: ${error.message}`);
                 this._stalePlacements.add(placement.window_id);
             }
         }
@@ -468,7 +468,7 @@ export default class DwindleExtension extends Extension {
             window.move_resize_frame(false, x, y, width, height);
             this._updateBorder(window);
         } catch (error) {
-            console.warn(`[DwindleRS] placement skipped: ${error.message}`);
+            console.warn(`[TileGNOME] placement skipped: ${error.message}`);
             return;
         }
         // ponytail: six attempts cover Wayland map/maximize handshakes; use
@@ -516,6 +516,6 @@ export default class DwindleExtension extends Extension {
         if (window)
             window.activate(global.get_current_time());
         else
-            console.warn('[DwindleRS] stale focus target skipped');
+            console.warn('[TileGNOME] stale focus target skipped');
     }
 }

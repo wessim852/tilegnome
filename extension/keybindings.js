@@ -32,7 +32,7 @@ export class Keybindings {
                 () => callback(action, direction)
             );
             if (result === Meta.KeyBindingAction.NONE)
-                console.warn(`[DwindleRS] keybinding unavailable: ${name}`);
+                console.warn(`[TileGNOME] keybinding unavailable: ${name}`);
         }
     }
 

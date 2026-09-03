@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-UUID='dwindle-rs@dwindlers.dev'
+UUID='tilegnome@wessim852.github.com'
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname -- "$SCRIPT_DIR")"
 

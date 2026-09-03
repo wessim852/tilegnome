@@ -1,5 +1,5 @@
 {
-  description = "GNOME 50 dwindle tiling engine and Shell adapter";
+  description = "TileGNOME binary-tree tiling for GNOME Shell 50";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
