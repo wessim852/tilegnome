@@ -491,6 +491,7 @@ globalThis.windowContextReady = windowContextReady;`;
         is_fullscreen: () => false,
         allows_move: () => true,
         allows_resize: () => resizeable,
+        is_maximized: () => false,
         get_monitor: () => 1,
         get_workspace: () => ({index: () => 2}),
         get_min_size: () => [true, 800, 600],
@@ -499,6 +500,19 @@ globalThis.windowContextReady = windowContextReady;`;
     assert.equal(windowsSandbox.shouldTile(appWindow, new Set()), false);
     resizeable = true;
     assert.equal(windowsSandbox.shouldTile(appWindow, new Set()), true);
+    // Browsers often restore native maximize. Mutter disables interactive
+    // resizing in this state but retains the underlying resizeable property.
+    resizeable = false;
+    appWindow.is_maximized = () => true;
+    appWindow.resizeable = true;
+    assert.equal(windowsSandbox.shouldTile(appWindow, new Set()), true);
+    appWindow.resizeable = false;
+    assert.equal(windowsSandbox.shouldTile(appWindow, new Set()), false);
+    appWindow.resizeable = true;
+    appWindow.is_fullscreen = () => true;
+    assert.equal(windowsSandbox.shouldTile(appWindow, new Set()), false);
+    appWindow.is_fullscreen = () => false;
+    assert.equal(windowsSandbox.shouldTile(appWindow, new Set(['com.brave.browser'])), false);
     assert.deepEqual(
         {...windowsSandbox.minimumSize(appWindow)},
         {min_width: 800, min_height: 600}

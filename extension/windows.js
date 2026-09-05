@@ -99,7 +99,9 @@ export function shouldTile(window, ignored) {
         return isTileCandidate(window, ignored)
             && windowContextReady(window)
             && window.allows_move()
-            && window.allows_resize();
+            // Mutter's allows_resize() is false for maximized windows even when
+            // the client is resizable. Admit them so placement can unmaximize.
+            && (window.allows_resize() || (window.is_maximized() && window.resizeable));
     } catch {
         return false;
     }
